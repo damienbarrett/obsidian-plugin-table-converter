@@ -1,0 +1,11 @@
+{
+	"id": "table-converter",
+	"name": "Table Converter",
+	"version": "1.0.0",
+	"minAppVersion": "0.15.0",
+	"description": "Convert heading-based documents to Markdown tables and back.",
+	"author": "Table Converter",
+	"authorUrl": "",
+	"fundingUrl": "",
+	"isDesktopOnly": false
+}

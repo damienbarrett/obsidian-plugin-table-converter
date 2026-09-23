@@ -1,0 +1,8 @@
+.git
+node_modules
+main.js
+main.js.map
+*.BAK
+*.errors.md
+.DS_Store
+tests/converter.bundled.mjs

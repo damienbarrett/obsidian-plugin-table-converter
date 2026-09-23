@@ -1,0 +1,20 @@
+{
+	"name": "obsidian-plugin-table-converter",
+	"version": "1.0.0",
+	"description": "Convert heading-based Markdown documents to Markdown tables and back.",
+	"main": "main.js",
+	"scripts": {
+		"dev": "node esbuild.config.mjs",
+		"build": "tsc --noEmit && node esbuild.config.mjs production",
+		"test": "node scripts/build-tests.mjs && node --test tests/*.test.mjs"
+	},
+	"keywords": [],
+	"author": "",
+	"license": "MIT",
+	"devDependencies": {
+		"@types/node": "^20.0.0",
+		"esbuild": "^0.21.0",
+		"obsidian": "latest",
+		"typescript": "^5.0.0"
+	}
+}
