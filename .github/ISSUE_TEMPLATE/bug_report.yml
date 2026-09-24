@@ -1,0 +1,57 @@
+name: Bug Report
+description: Report something that is not working
+title: "[Bug] "
+body:
+  - type: input
+    id: obsidian_version
+    attributes:
+      label: Obsidian version
+      placeholder: "e.g., 1.5.3"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options:
+        - Desktop (macOS)
+        - Desktop (Windows)
+        - Desktop (Linux)
+        - iOS
+        - Android
+    validations:
+      required: true
+
+  - type: input
+    id: plugin_version
+    attributes:
+      label: Plugin version
+      placeholder: "e.g., 1.0.0"
+    validations:
+      required: true
+
+  - type: textarea
+    id: what_happened
+    attributes:
+      label: What happened?
+      description: Clear description of the issue
+    validations:
+      required: true
+
+  - type: textarea
+    id: sample_note
+    attributes:
+      label: Minimal sample note
+      description: Include the full note content in a markdown code block
+      render: markdown
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected_result
+    attributes:
+      label: Expected result
+      description: What should have happened instead?
+    validations:
+      required: true

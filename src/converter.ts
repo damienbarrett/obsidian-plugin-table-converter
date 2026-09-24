@@ -37,14 +37,12 @@ interface ParsedDocument {
 }
 
 interface ParsedTable {
-	headersRaw: string[];
+	// Decoded (unescaped) header cells, including the table title at [0].
 	headers: string[];
-	colCount: number;
-	bodyRowsRaw: string[][];
+	// Raw (still table-escaped) body cells, trimmed; row title is at [0] of
+	// each row. Decoding happens when rendering to document text, since the
+	// row-title and per-column decoding rules differ slightly.
 	bodyRows: string[][];
-	headerLine: number;
-	delimiterLine: number;
-	bodyLines: number[];
 }
 
 // ---------------------------------------------------------------------------
@@ -65,6 +63,26 @@ export function getErrorNotePath(sourcePath: string): string {
 function basenameOf(path: string): string {
 	const parts = path.split("/");
 	return parts[parts.length - 1] ?? path;
+}
+
+export interface OutputPaths {
+	backupPath: string;
+	backupName: string;
+	errorPath: string;
+	errorName: string;
+}
+
+// Single source of truth for the backup and error-note paths (and their
+// display names) derived from a source note path.
+export function getOutputPaths(sourcePath: string): OutputPaths {
+	const backupPath = getBackupPath(sourcePath);
+	const errorPath = getErrorNotePath(sourcePath);
+	return {
+		backupPath,
+		backupName: basenameOf(backupPath),
+		errorPath,
+		errorName: basenameOf(errorPath),
+	};
 }
 
 export function formatErrorsAsNote(
@@ -164,39 +182,146 @@ function parseHeading(line: string): { level: number; title: string } | null {
 }
 
 // ---------------------------------------------------------------------------
-// Titles: escaping for table output
+// Backslash-escaping: shared rule for titles and cell content
 // ---------------------------------------------------------------------------
+//
+// Only a `|` or a literal `<br>` tag needs escaping for table syntax, and
+// only the backslashes immediately in front of one matter to that escaping:
+// a run of `n` backslashes directly before a `|`/`<br>` is escaped iff `n`
+// is odd (the leftover, unpaired backslash is the escape marker; the rest
+// pair off as `floor(n/2)` literal backslashes). Backslashes anywhere else
+// (e.g. `C:\Users`, `\frac{a}{b}`) are ordinary content and are never
+// touched, so common Markdown/LaTeX/path content round-trips byte-for-byte.
+// `escapeCellText` writes output consistent with that rule; `unescapeCellText`
+// and `isEscapedAt`/`splitTableRow` read it back.
 
-const BR_TAG = /<\s*br\s*\/?\s*>/gi;
+const BR_TAG_ANCHORED = /^<\s*br\s*\/?\s*>/i;
 
-function escapeBrTagText(text: string): string {
-	return text.replace(/(\\?)(<\s*br\s*\/?\s*>)/gi, (whole, bs, tag) => {
-		if (bs) return whole;
-		return `\\${tag}`;
-	});
+// Number of consecutive `\` characters immediately before index `idx`.
+function countBackslashesBefore(s: string, idx: number): number {
+	let n = 0;
+	let j = idx - 1;
+	while (j >= 0 && s[j] === "\\") {
+		n++;
+		j--;
+	}
+	return n;
+}
+
+function isEscapedAt(s: string, idx: number): boolean {
+	return countBackslashesBefore(s, idx) % 2 === 1;
+}
+
+// Escapes `|` and literal `<br>` tags for table syntax. A run of backslashes
+// is only doubled when it sits directly in front of one of those two things
+// (so the reader can tell those backslashes apart from the escape marker
+// that follows); backslashes anywhere else pass through unchanged.
+function escapeCellText(text: string): string {
+	let out = "";
+	for (let i = 0; i < text.length; ) {
+		const c = text[i];
+		if (c === "\\") {
+			let j = i;
+			while (j < text.length && text[j] === "\\") j++;
+			const runLen = j - i;
+			const rest = text.slice(j);
+			const br = BR_TAG_ANCHORED.exec(rest);
+			if (rest[0] === "|") {
+				out += "\\".repeat(runLen * 2) + "\\|";
+				i = j + 1;
+				continue;
+			}
+			if (br) {
+				out += "\\".repeat(runLen * 2) + "\\" + br[0];
+				i = j + br[0].length;
+				continue;
+			}
+			// Not immediately before | or <br>: emit the run unchanged.
+			out += text.slice(i, j);
+			i = j;
+			continue;
+		}
+		const br = BR_TAG_ANCHORED.exec(text.slice(i));
+		if (br) {
+			out += "\\" + br[0];
+			i += br[0].length;
+			continue;
+		}
+		if (c === "|") {
+			out += "\\|";
+			i += 1;
+			continue;
+		}
+		out += c;
+		i += 1;
+	}
+	return out;
+}
+
+// Inverse of escapeCellText. Only resolves a backslash run that sits
+// directly before a `|` or `<br>` tag (per the parity rule above); any other
+// backslash run is left exactly as written.
+function unescapeCellText(text: string): string {
+	let out = "";
+	for (let i = 0; i < text.length; ) {
+		if (text[i] === "\\") {
+			let j = i;
+			while (j < text.length && text[j] === "\\") j++;
+			const runLen = j - i;
+			const rest = text.slice(j);
+			const br = BR_TAG_ANCHORED.exec(rest);
+			const isPipe = rest[0] === "|";
+			if (isPipe || br) {
+				out += "\\".repeat(Math.floor(runLen / 2));
+				if (runLen % 2 === 1) {
+					// Odd: the leftover backslash escapes this tag/pipe.
+					if (isPipe) {
+						out += "|";
+						i = j + 1;
+					} else if (br) {
+						out += br[0];
+						i = j + br[0].length;
+					}
+				} else {
+					// Even: no escape marker here; leave the tag/pipe itself
+					// for normal handling (it is a real separator/break).
+					i = j;
+				}
+				continue;
+			}
+			// Not before | or <br>: emit the run unchanged.
+			out += text.slice(i, j);
+			i = j;
+			continue;
+		}
+		out += text[i];
+		i += 1;
+	}
+	return out;
 }
 
 function escapeTitleForTable(title: string): string {
-	const t = title.trim();
-	const e1 = escapeBrTagText(t);
-	return e1.replace(/\|/g, "\\|");
-}
-
-function unescapePipes(text: string): string {
-	return text.replace(/\\\|/g, "|");
-}
-
-function unescapeBrTag(text: string): string {
-	return text.replace(/\\(<\s*br\s*\/?\s*>)/gi, "$1");
+	return escapeCellText(title.trim());
 }
 
 function unescapeTitle(raw: string): string {
-	return unescapeBrTag(unescapePipes(raw)).trim();
+	return unescapeCellText(raw).trim();
 }
 
 // ---------------------------------------------------------------------------
-// Table row splitting (single-char lookbehind-free)
+// Table row splitting
 // ---------------------------------------------------------------------------
+
+// A cell closed at a real (unescaped, even-count) delimiter pipe may still
+// end in a run of literal backslashes directly against that pipe (e.g. a
+// hand-written or foreign table). Per the parity rule, an even run there
+// decodes as half as many literal backslashes; splitTableRow itself is the
+// only place that still has the pipe's context to apply that halving.
+function halveTrailingBackslashes(s: string): string {
+	const m = /\\+$/.exec(s);
+	if (!m) return s;
+	return s.slice(0, m.index) + "\\".repeat(Math.floor(m[0].length / 2));
+}
 
 function splitTableRow(line: string): string[] | null {
 	if (line.indexOf("|") === -1) return null;
@@ -204,8 +329,8 @@ function splitTableRow(line: string): string[] | null {
 	let cur = "";
 	for (let i = 0; i < line.length; i++) {
 		const c = line[i];
-		if (c === "|" && (i === 0 || line[i - 1] !== "\\")) {
-			parts.push(cur);
+		if (c === "|" && !isEscapedAt(line, i)) {
+			parts.push(halveTrailingBackslashes(cur));
 			cur = "";
 		} else {
 			cur += c;
@@ -218,10 +343,10 @@ function splitTableRow(line: string): string[] | null {
 	if (trimmed.startsWith("|")) {
 		parts.shift();
 	}
-	// Drop trailing empty part when line ends with unescaped |.
+	// Drop trailing empty part when line ends with an unescaped |.
 	if (
 		trimmed.endsWith("|") &&
-		(trimmed.length === 1 || trimmed[trimmed.length - 2] !== "\\")
+		!isEscapedAt(trimmed, trimmed.length - 1)
 	) {
 		parts.pop();
 	}
@@ -342,13 +467,15 @@ function parseAndValidateTable(
 		return { parsed: null, errors };
 	}
 
-	const bodyRowsRaw = splitRows.slice(2);
+	// Raw (still table-escaped) body cells, trimmed; decoding happens when
+	// rendering to document text.
+	const bodyRows = splitRows.slice(2);
 	const bodyLinesNo: number[] = [];
-	for (let i = 0; i < bodyRowsRaw.length; i++) bodyLinesNo.push(idxToOrig(i + 2));
+	for (let i = 0; i < bodyRows.length; i++) bodyLinesNo.push(idxToOrig(i + 2));
 
 	// Column count.
-	for (let i = 0; i < bodyRowsRaw.length; i++) {
-		const row = bodyRowsRaw[i] ?? [];
+	for (let i = 0; i < bodyRows.length; i++) {
+		const row = bodyRows[i] ?? [];
 		if (row.length !== colCount) {
 			errors.push({
 				line: bodyLinesNo[i] ?? headerLine,
@@ -381,7 +508,7 @@ function parseAndValidateTable(
 	});
 
 	// Row titles non-empty + unique.
-	const rowTitles = bodyRowsRaw.map((r) => unescapeTitle(r[0] ?? ""));
+	const rowTitles = bodyRows.map((r) => unescapeTitle(r[0] ?? ""));
 	rowTitles.forEach((t, i) => {
 		if (t === "") {
 			errors.push({
@@ -403,7 +530,7 @@ function parseAndValidateTable(
 		}
 	});
 
-	if (bodyRowsRaw.length === 0) {
+	if (bodyRows.length === 0) {
 		errors.push({
 			line: delimiterLine,
 			message: `Table must have at least one body row. Line ${delimiterLine}.`,
@@ -413,18 +540,8 @@ function parseAndValidateTable(
 
 	if (errors.length > 0) return { parsed: null, errors };
 
-	const bodyRows = bodyRowsRaw.map((r) => r.map((c) => c));
 	return {
-		parsed: {
-			headersRaw: headerRaw,
-			headers,
-			colCount,
-			bodyRowsRaw,
-			bodyRows,
-			headerLine,
-			delimiterLine,
-			bodyLines: bodyLinesNo,
-		},
+		parsed: { headers, bodyRows },
 		errors,
 	};
 }
@@ -437,35 +554,22 @@ function detectNestedTable(
 	contentLines: string[],
 	contentStartOrigLine: number,
 ): { found: boolean; line: number } {
-	let fence: Fence | null = null;
 	const n = contentLines.length;
 	const origOf = (i: number) => contentStartOrigLine + i;
+	// Single pass: record fence state per line to check consecutive pairs.
+	const inFence: boolean[] = [];
+	let fence: Fence | null = null;
 	for (let i = 0; i < n; i++) {
 		const line = contentLines[i] ?? "";
 		if (fence) {
+			inFence.push(true);
 			if (isFenceClosing(line, fence)) fence = null;
 			continue;
 		}
 		const open = parseFenceOpening(line);
 		if (open) {
+			inFence.push(true);
 			fence = open;
-			continue;
-		}
-	}
-	// Second pass with per-line fence state to check consecutive pairs.
-	const inFence: boolean[] = [];
-	let f: Fence | null = null;
-	for (let i = 0; i < n; i++) {
-		const line = contentLines[i] ?? "";
-		if (f) {
-			inFence.push(true);
-			if (isFenceClosing(line, f)) f = null;
-			continue;
-		}
-		const open = parseFenceOpening(line);
-		if (open) {
-			inFence.push(true);
-			f = open;
 			continue;
 		}
 		inFence.push(false);
@@ -624,11 +728,7 @@ function parseAndValidateDocument(
 			} else if (currentCol) {
 				closeCol();
 			}
-			if (h1s.length === 1 && state === "BEFORE_H1") {
-				state = "AFTER_H1";
-			} else {
-				state = "AFTER_H1";
-			}
+			state = "AFTER_H1";
 		} else if (h.level === 2) {
 			if (heading.trimmed === "") {
 				errors.push({
@@ -775,6 +875,20 @@ function parseAndValidateDocument(
 // Cell conversions
 // ---------------------------------------------------------------------------
 
+// A line whose escaped text ends in a run of backslashes, immediately
+// followed by a real (renderer-inserted) `<br>` join marker, needs that
+// trailing run doubled first. escapeCellText only doubles a run when it is
+// immediately before a `|`/`<br>` *within that same raw line*; it cannot see
+// the `<br>` this function is about to append. Without doubling here, an odd
+// trailing run (e.g. a line ending in one literal backslash) would look
+// identical, to the decoder's backslash-parity check, to an escaped
+// "\<br>" and wrongly merge two lines back into one on the next conversion.
+function doubleTrailingBackslashes(s: string): string {
+	const m = /\\+$/.exec(s);
+	if (!m) return s;
+	return s.slice(0, m.index) + m[0] + m[0];
+}
+
 function docCellLinesToTableCell(rawLines: string[]): string {
 	let s = 0;
 	let e = rawLines.length - 1;
@@ -782,11 +896,9 @@ function docCellLinesToTableCell(rawLines: string[]): string {
 	while (e >= s && (rawLines[e] ?? "").trim() === "") e--;
 	if (s > e) return "";
 	const sliced = rawLines.slice(s, e + 1);
-	const escaped: string[] = sliced.map((l) => {
-		if (l.trim() === "") return "";
-		const e1 = escapeBrTagText(l);
-		return e1.replace(/\|/g, "\\|");
-	});
+	const escaped: string[] = sliced.map((l) =>
+		l.trim() === "" ? "" : escapeCellText(l),
+	);
 	const paras: string[][] = [];
 	let cur: string[] = [];
 	for (const l of escaped) {
@@ -801,41 +913,79 @@ function docCellLinesToTableCell(rawLines: string[]): string {
 	}
 	if (cur.length > 0) paras.push(cur);
 	if (paras.length === 0) return "";
-	return paras.map((p) => p.join("<br>")).join("<br><br>");
-}
 
-const ESCAPED_BR_OPEN = "\uE000";
-const ESCAPED_BR_CLOSE = "\uE001";
-const PARA_TOKEN = "\uE002PARA\uE003";
+	const joined = paras.map((p, pi) => {
+		const isLastPara = pi === paras.length - 1;
+		const lines = p.map((l, li) => {
+			const isLastLineOfPara = li === p.length - 1;
+			const followedByBreak = !isLastLineOfPara || !isLastPara;
+			return followedByBreak ? doubleTrailingBackslashes(l) : l;
+		});
+		return lines.join("<br>");
+	});
+	return joined.join("<br><br>");
+}
 
 function tableCellToDocText(cell: string): string {
 	const trimmed = cell.trim();
 	if (trimmed === "") return "";
-	const escapedTags: string[] = [];
-	let tmp = trimmed.replace(
-		/\\(<\s*br\s*\/?\s*>)/gi,
-		(_whole, tag: string) => {
-			escapedTags.push(tag);
-			return `${ESCAPED_BR_OPEN}${escapedTags.length - 1}${ESCAPED_BR_CLOSE}`;
-		},
-	);
-	tmp = tmp.replace(
-		/<\s*br\s*\/?\s*>\s*<\s*br\s*\/?\s*>/gi,
-		PARA_TOKEN,
-	);
-	tmp = tmp.replace(/<\s*br\s*\/?\s*>/gi, "\n");
-	tmp = tmp.split(PARA_TOKEN).join("\n\n");
-	const restoreRe = new RegExp(ESCAPED_BR_OPEN + "(\\d+)" + ESCAPED_BR_CLOSE, "g");
-	tmp = tmp.replace(restoreRe, (_w: string, idx: string) => escapedTags[Number(idx)] ?? "<br>");
-	tmp = unescapePipes(tmp);
+
+	// Phase 1: turn *real* (unescaped) <br> markers into line/paragraph
+	// breaks. An escaped "\<br>" (odd preceding backslash run) is left
+	// untouched here; it is literal text resolved by unescapeCellText below.
+	// A real <br> may still have an even backslash run directly before it
+	// (see doubleTrailingBackslashes) — those pair off as literal
+	// backslashes and must be halved here, symmetric with the write side.
+	let withBreaks = "";
+	for (let i = 0; i < trimmed.length; ) {
+		const c = trimmed[i];
+		if (c === "\\" || BR_TAG_ANCHORED.test(trimmed.slice(i))) {
+			let j = i;
+			while (j < trimmed.length && trimmed[j] === "\\") j++;
+			const runLen = j - i;
+			const rest = trimmed.slice(j);
+			const m = BR_TAG_ANCHORED.exec(rest);
+			if (m) {
+				if (runLen % 2 === 0) {
+					withBreaks += "\\".repeat(runLen / 2);
+					const afterFirst = rest.slice(m[0].length);
+					const m2 = BR_TAG_ANCHORED.exec(afterFirst);
+					if (m2) {
+						withBreaks += "\n\n";
+						i = j + m[0].length + m2[0].length;
+					} else {
+						withBreaks += "\n";
+						i = j + m[0].length;
+					}
+					continue;
+				}
+				// Odd run: this <br> is escaped. Consume the run and the
+				// tag together, untouched, so the tag is never re-examined
+				// on its own (which would look like an unescaped <br>);
+				// unescapeCellText (phase 2) resolves it below.
+				withBreaks += trimmed.slice(i, j + m[0].length);
+				i = j + m[0].length;
+				continue;
+			}
+			// Backslash run not before <br> at all (e.g. before `|`, or
+			// bare content): leave untouched for phase 2 to resolve.
+			withBreaks += trimmed.slice(i, j);
+			i = j;
+			continue;
+		}
+		withBreaks += c;
+		i += 1;
+	}
+
+	// Phase 2: resolve remaining escapes (doubled backslashes, escaped
+	// <br> tags, escaped pipes) into literal characters.
+	const tmp = unescapeCellText(withBreaks);
+
 	// Trim surrounding blank lines.
 	const parts = tmp.split("\n");
 	let a = 0;
 	let b = parts.length - 1;
-	while (a <= b && (parts[a] ?? "").trim() === "" && parts[a] !== undefined) {
-		// Keep single? Actually trim surrounding blanks.
-		a++;
-	}
+	while (a <= b && (parts[a] ?? "").trim() === "") a++;
 	while (b >= a && (parts[b] ?? "").trim() === "") b--;
 	if (a > b) return "";
 	return parts.slice(a, b + 1).join("\n");
@@ -906,11 +1056,25 @@ function assembleOutput(
 // Entry
 // ---------------------------------------------------------------------------
 
-export function convertNote(input: string): ConvertResult {
+export interface ConvertNoteOptions {
+	// Whether to detect and preserve a leading YAML front-matter block.
+	// Defaults to true (whole-note behavior). Pass false when converting a
+	// selection/fragment that may not start at the top of the note, so a
+	// leading "---" line is treated as ordinary content instead of being
+	// mistaken for front matter.
+	frontMatter?: boolean;
+}
+
+export function convertNote(
+	input: string,
+	options?: ConvertNoteOptions,
+): ConvertResult {
+	const useFrontMatter = options?.frontMatter ?? true;
 	const normalized = input.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
 	const allLines = normalized.split("\n");
-	const { frontMatterLines, bodyLines, frontMatterCount } =
-		splitFrontMatter(allLines);
+	const { frontMatterLines, bodyLines, frontMatterCount } = useFrontMatter
+		? splitFrontMatter(allLines)
+		: { frontMatterLines: [] as string[], bodyLines: allLines, frontMatterCount: 0 };
 
 	if (bodyLines.join("\n").trim() === "") {
 		return {

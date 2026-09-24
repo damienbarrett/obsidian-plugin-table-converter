@@ -4,8 +4,9 @@ import {
 	convertNote,
 	getBackupPath,
 	getErrorNotePath,
+	getOutputPaths,
 	formatErrorsAsNote,
-} from "./converter.bundled.mjs";
+} from "../node_modules/.cache/table-converter-tests/converter.bundled.mjs";
 
 const DOC1 = `# Table Title
 
@@ -358,5 +359,219 @@ describe("delimiter alignment not preserved (parses)", () => {
 		const t = "| A | B |\n| :--- | ---: |\n| x | y |\n";
 		const r = okOut(t);
 		assert.equal(r.direction, "table-to-document");
+	});
+});
+
+describe("pipe escaping: backslash parity", () => {
+	// A `|` in table syntax is escaped iff it is preceded by an odd number
+	// of consecutive backslashes. These cases pin down that rule instead of
+	// a naive "single preceding char" check.
+
+	it("two backslashes before a pipe: escaped backslash, then a real separator", () => {
+		// Body cell "A" is `x` followed by two literal backslashes, directly
+		// against the delimiter pipe (even count -> not escaped -> the row
+		// still has 3 cells).
+		const t = "| T | A | B |\n| --- | --- | --- |\n| R | x\\\\| y |\n";
+		const r = okOut(t);
+		assert.equal(r.direction, "table-to-document");
+		// Decodes to one literal backslash (the pair), not two.
+		assert.ok(r.output.includes("### A\n\nx\\\n\n### B"));
+	});
+
+	it("three backslashes before a pipe: escaped backslash + escaped pipe, one cell", () => {
+		// Body cell "C" is `x` + three backslashes + `|` + `y`. The pipe is
+		// escaped (odd count), so it does not split the row.
+		const t = "| T | C |\n| --- | --- |\n| R | x\\\\\\|y |\n";
+		const r = okOut(t);
+		assert.equal(r.direction, "table-to-document");
+		// Decodes to one literal backslash followed by one literal pipe.
+		assert.ok(r.output.includes("### C\n\nx\\|y\n"));
+		const back = okOut(r.output);
+		assert.equal(back.output, t);
+	});
+
+	it("a three-backslash run still merges the row (regression guard)", () => {
+		// Same pattern as above but with a header expecting 3 columns: since
+		// the pipe is escaped, the row only has 2 cells and validation must
+		// report a mismatch rather than silently splitting on it.
+		const t = "| T | A | B |\n| --- | --- | --- |\n| R | x\\\\\\| y |\n";
+		const r = convertNote(t);
+		assert.equal(r.ok, false);
+		assert.ok(r.errors.some((e) => /cells/i.test(e.message)));
+	});
+
+	it("applies the same rule to a table header (title)", () => {
+		// Header cell is `T` + three backslashes + `|` + `U` (escaped pipe).
+		const t = "| T\\\\\\|U | C |\n| --- | --- |\n| R | x |\n";
+		const r = okOut(t);
+		assert.equal(r.direction, "table-to-document");
+		assert.ok(r.output.startsWith("# T\\|U\n"));
+	});
+
+	it("applies the same rule to a row title", () => {
+		const t = "| T | C |\n| --- | --- |\n| R\\\\\\|S | x |\n";
+		const r = okOut(t);
+		assert.ok(r.output.includes("## R\\|S\n"));
+	});
+
+	it("literal <br> directly adjacent to a pipe round-trips", () => {
+		const doc = "# T\n\n## R\n\n### C\n\nbefore<br>after | pipe\n";
+		const r = okOut(doc);
+		assert.equal(r.direction, "document-to-table");
+		assert.ok(r.output.includes("before\\<br>after \\| pipe"));
+		const back = okOut(r.output);
+		assert.equal(back.output, doc);
+	});
+
+	it("literal backslashes next to a pipe round-trip through a document", () => {
+		// Doc content has two literal backslashes directly before a pipe;
+		// this is plain text (not table syntax) at this stage.
+		const doc = "# T\n\n## R\n\n### C\n\nx\\\\|y\n";
+		const r = okOut(doc);
+		assert.equal(r.direction, "document-to-table");
+		const back = okOut(r.output);
+		assert.equal(back.output, doc);
+	});
+
+	it("a single literal backslash with no adjacent special character round-trips", () => {
+		const doc = "# T\n\n## R\n\n### C\n\nx\\y\n";
+		const r = okOut(doc);
+		// Not near a `|` or `<br>`, so it must not be doubled in the table.
+		assert.ok(r.output.includes("x\\y"));
+		assert.ok(!r.output.includes("x\\\\y"));
+		const back = okOut(r.output);
+		assert.equal(back.output, doc);
+	});
+});
+
+describe("backslash escaping is targeted, not wholesale doubling", () => {
+	// escapeCellText/unescapeCellText must only touch backslashes that sit
+	// directly in front of a `|` or `<br>`. Anything else (LaTeX, Windows
+	// paths, arbitrary backslash pairs) must appear in the table exactly as
+	// typed and round-trip byte-identically, matching 1.0.0 output for
+	// content with no backslash-before-pipe/br.
+
+	it("LaTeX-style content with backslashes round-trips untouched", () => {
+		const doc = "# T\n\n## R\n\n### C\n\n$\\frac{a}{b}$\n";
+		const r = okOut(doc);
+		assert.equal(
+			r.output,
+			"| T | C |\n| --- | --- |\n| R | $\\frac{a}{b}$ |\n",
+		);
+		const back = okOut(r.output);
+		assert.equal(back.output, doc);
+	});
+
+	it("a Windows path in a code span round-trips untouched", () => {
+		const doc = "# T\n\n## R\n\n### C\n\n`C:\\Users\\x`\n";
+		const r = okOut(doc);
+		assert.equal(
+			r.output,
+			"| T | C |\n| --- | --- |\n| R | `C:\\Users\\x` |\n",
+		);
+		const back = okOut(r.output);
+		assert.equal(back.output, doc);
+	});
+
+	it("a backslash pair not near a pipe survives unchanged, un-doubled", () => {
+		const doc = "# T\n\n## R\n\n### C\n\na\\\\b\n";
+		const r = okOut(doc);
+		assert.equal(r.output, "| T | C |\n| --- | --- |\n| R | a\\\\b |\n");
+		const back = okOut(r.output);
+		assert.equal(back.output, doc);
+	});
+
+	it("a table with a 1.0.0-style literal backslash pair decodes unchanged", () => {
+		// As 1.0.0 would have written a literal `a\\b` (no pipe adjacency):
+		// two backslashes, untouched by escaping, must decode as two
+		// backslashes, not collapse to one.
+		const t = "| T | C |\n| --- | --- |\n| R | a\\\\b |\n";
+		const r = okOut(t);
+		assert.equal(r.direction, "table-to-document");
+		assert.equal(r.output, "# T\n\n## R\n\n### C\n\na\\\\b\n");
+	});
+});
+
+describe("item 4: getOutputPaths", () => {
+	it("derives backup/error paths and display names from a source path", () => {
+		const p = getOutputPaths("Folder/Note.md");
+		assert.equal(p.backupPath, "Folder/Note.md.BAK");
+		assert.equal(p.backupName, "Note.md.BAK");
+		assert.equal(p.errorPath, "Folder/Note.errors.md");
+		assert.equal(p.errorName, "Note.errors.md");
+	});
+	it("matches the standalone helpers for a root-level path", () => {
+		const p = getOutputPaths("Note.md");
+		assert.equal(p.backupPath, getBackupPath("Note.md"));
+		assert.equal(p.errorPath, getErrorNotePath("Note.md"));
+		assert.equal(p.backupName, "Note.md.BAK");
+		assert.equal(p.errorName, "Note.errors.md");
+	});
+	it("handles a source path without a .md extension", () => {
+		const p = getOutputPaths("Folder/Note");
+		assert.equal(p.backupPath, "Folder/Note.BAK");
+		assert.equal(p.backupName, "Note.BAK");
+		assert.equal(p.errorPath, "Folder/Note.errors.md");
+		assert.equal(p.errorName, "Note.errors.md");
+	});
+});
+
+describe("selection support: convertNote on a fragment", () => {
+	// convertNote takes raw text, not a whole-note object, so a selection
+	// containing exactly one document block or one table (with no front
+	// matter) should convert the same way the whole note would.
+
+	it("converts a document fragment with leading/trailing blank lines", () => {
+		const r = okOut(`\n\n${DOC1}\n\n`);
+		assert.equal(r.direction, "document-to-table");
+		assert.equal(r.output, TABLE1);
+	});
+
+	it("converts a table fragment with leading/trailing blank lines", () => {
+		const r = okOut(`\n\n${TABLE1.trimEnd()}\n\n`);
+		assert.equal(r.direction, "table-to-document");
+		assert.equal(r.output, DOC1);
+	});
+
+	it("converts a document fragment with no trailing newline", () => {
+		const r = okOut(DOC1.replace(/\n+$/, ""));
+		assert.equal(r.direction, "document-to-table");
+		assert.equal(r.output, TABLE1);
+	});
+
+	it("converts a table fragment with no trailing newline", () => {
+		const r = okOut(TABLE1.replace(/\n+$/, ""));
+		assert.equal(r.direction, "table-to-document");
+		assert.equal(r.output, DOC1);
+	});
+
+	// By default convertNote treats a leading `---` line as the start of
+	// YAML front matter (see splitFrontMatter), which is correct for a
+	// whole note but wrong for a selection/fragment that isn't anchored at
+	// the top of the note. `{ frontMatter: false }` opts out of that.
+	it("with frontMatter: false, a leading '---' line is content, not front matter", () => {
+		const fm = "---\ntitle: Hi\n---\n";
+		const withFm = fm + DOC1;
+
+		// Default behavior (frontMatter: true): the leading block is parsed
+		// and preserved as front matter, and conversion succeeds.
+		const asWholeNote = convertNote(withFm);
+		assert.equal(asWholeNote.ok, true);
+		assert.ok(asWholeNote.output.startsWith(fm));
+
+		// Same text as a selection fragment (frontMatter: false): the
+		// leading "---" is now content appearing before the "#" title,
+		// which is a real validation error per the document rules.
+		const asSelection = convertNote(withFm, { frontMatter: false });
+		assert.equal(asSelection.ok, false);
+		assert.ok(
+			asSelection.errors.some((e) => /before table title/i.test(e.message)),
+		);
+	});
+
+	it("frontMatter option defaults to true (existing calls are unaffected)", () => {
+		const r = convertNote(DOC1);
+		assert.equal(r.ok, true);
+		assert.equal(r.output, TABLE1);
 	});
 });
