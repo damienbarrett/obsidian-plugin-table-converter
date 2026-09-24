@@ -95,7 +95,7 @@ describe("convertFile success", () => {
 		await convertFile(adapter, reporter, file, baseSettings);
 
 		assert.equal(adapter.files.get("Note.md"), TABLE);
-		assert.equal(adapter.files.get("Note.md.BAK"), DOC);
+		assert.equal(adapter.files.get("Note.BAK.md"), DOC);
 		assert.ok(reporter.notices.some((n) => /document → table/.test(n)));
 	});
 
@@ -116,7 +116,7 @@ describe("convertFile backup failure", () => {
 	it("leaves the source unchanged and reports the failure", async () => {
 		const file = makeFile("Note.md");
 		const adapter = new FakeAdapter({ "Note.md": DOC });
-		adapter.failWritePaths.add("Note.md.BAK");
+		adapter.failWritePaths.add("Note.BAK.md");
 		const reporter = new FakeReporter();
 
 		await convertFile(adapter, reporter, file, baseSettings);
@@ -137,7 +137,7 @@ describe("convertFile source write failure", () => {
 		await convertFile(adapter, reporter, file, baseSettings);
 
 		assert.equal(adapter.files.get("Note.md"), DOC);
-		assert.equal(adapter.files.get("Note.md.BAK"), DOC);
+		assert.equal(adapter.files.get("Note.BAK.md"), DOC);
 		assert.ok(adapter.files.has("Note.errors.md"));
 	});
 });
@@ -186,7 +186,7 @@ describe("backupMode variants", () => {
 
 		await convertFile(adapter, reporter, file, { ...baseSettings, backupMode: "off" });
 
-		assert.equal(adapter.files.has("Note.md.BAK"), false);
+		assert.equal(adapter.files.has("Note.BAK.md"), false);
 		assert.ok(reporter.notices.some((n) => /no backup \(disabled\)/.test(n)));
 	});
 
@@ -202,7 +202,7 @@ describe("backupMode variants", () => {
 		});
 
 		assert.ok(adapter.folders.has("Backups"));
-		assert.equal(adapter.files.get("Backups/Note.md.BAK"), DOC);
+		assert.equal(adapter.files.get("Backups/Note.BAK.md"), DOC);
 	});
 
 	it("mirrors a nested note's folder under the backup folder", async () => {
@@ -217,7 +217,7 @@ describe("backupMode variants", () => {
 		});
 
 		assert.ok(adapter.folders.has("Backups/Projects/Sub"));
-		assert.equal(adapter.files.get("Backups/Projects/Sub/Notes.md.BAK"), DOC);
+		assert.equal(adapter.files.get("Backups/Projects/Sub/Notes.BAK.md"), DOC);
 	});
 
 	it("does not collide when two notes share a name in different folders", async () => {
@@ -233,8 +233,8 @@ describe("backupMode variants", () => {
 		await convertFile(adapter, reporter, fileA, settings);
 		await convertFile(adapter, reporter, fileB, settings);
 
-		assert.equal(adapter.files.get("Backups/Projects/Notes.md.BAK"), DOC);
-		assert.equal(adapter.files.get("Backups/Archive/Notes.md.BAK"), DOC);
+		assert.equal(adapter.files.get("Backups/Projects/Notes.BAK.md"), DOC);
+		assert.equal(adapter.files.get("Backups/Archive/Notes.BAK.md"), DOC);
 		// Both backups survive; neither overwrote the other.
 		assert.equal(adapter.files.get("Projects/Notes.md"), TABLE);
 		assert.equal(adapter.files.get("Archive/Notes.md"), TABLE);
@@ -268,7 +268,7 @@ describe("T30 transposeFile shares convertFile's workflow rules", () => {
 		await transposeFile(adapter, reporter, file, baseSettings);
 
 		assert.equal(adapter.files.get("Note.md"), TRANSPOSED_DOC);
-		assert.equal(adapter.files.get("Note.md.BAK"), DOC);
+		assert.equal(adapter.files.get("Note.BAK.md"), DOC);
 		assert.ok(reporter.notices.some((n) => /transposed rows ↔ columns \(document\)/.test(n)));
 	});
 
@@ -287,7 +287,7 @@ describe("T30 transposeFile shares convertFile's workflow rules", () => {
 	it("backup failure leaves the source unchanged and reports the failure", async () => {
 		const file = makeFile("Note.md");
 		const adapter = new FakeAdapter({ "Note.md": DOC });
-		adapter.failWritePaths.add("Note.md.BAK");
+		adapter.failWritePaths.add("Note.BAK.md");
 		const reporter = new FakeReporter();
 
 		await transposeFile(adapter, reporter, file, baseSettings);
@@ -306,7 +306,7 @@ describe("T30 transposeFile shares convertFile's workflow rules", () => {
 
 		assert.equal(adapter.files.get("Note.md"), INVALID);
 		assert.ok(adapter.files.has("Note.errors.md"));
-		assert.equal(adapter.files.has("Note.md.BAK"), false);
+		assert.equal(adapter.files.has("Note.BAK.md"), false);
 	});
 
 	it("validation failure (header conflict): source unchanged, no file written (modal mode)", async () => {
@@ -371,7 +371,7 @@ describe("convertSelection", () => {
 
 		assert.equal(result.ok, true);
 		assert.equal(result.output, TABLE);
-		assert.equal(adapter.files.has("Note.md.BAK"), false);
+		assert.equal(adapter.files.has("Note.BAK.md"), false);
 		assert.ok(reporter.notices.some((n) => /Ctrl\/Cmd\+Z/.test(n)));
 	});
 

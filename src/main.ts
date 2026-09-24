@@ -13,7 +13,7 @@ import {
 	TFile,
 	normalizePath,
 } from "obsidian";
-import type { ValidationError } from "./converter";
+import { isConvertibleNotePath, type ValidationError } from "./converter";
 import {
 	convertFile,
 	convertSelection,
@@ -248,7 +248,7 @@ export default class TableConverterPlugin extends Plugin {
 			name: "Convert document ↔ table",
 			checkCallback: (checking: boolean) => {
 				const file = this.app.workspace.getActiveFile();
-				if (!file || file.extension.toLowerCase() !== "md") return false;
+				if (!file || !isConvertibleNotePath(file.path)) return false;
 				if (checking) return true;
 				void this.runConvertFile(file);
 				return true;
@@ -260,7 +260,7 @@ export default class TableConverterPlugin extends Plugin {
 			name: "Transpose rows ↔ columns",
 			checkCallback: (checking: boolean) => {
 				const file = this.app.workspace.getActiveFile();
-				if (!file || file.extension.toLowerCase() !== "md") return false;
+				if (!file || !isConvertibleNotePath(file.path)) return false;
 				if (checking) return true;
 				void this.runTransposeFile(file);
 				return true;
@@ -277,7 +277,7 @@ export default class TableConverterPlugin extends Plugin {
 			) => {
 				if (!editor.somethingSelected()) return false;
 				const file = ctx.file;
-				if (!file) return false;
+				if (!file || !isConvertibleNotePath(file.path)) return false;
 				if (checking) return true;
 				void this.runConvertSelection(editor, file);
 				return true;
@@ -286,7 +286,7 @@ export default class TableConverterPlugin extends Plugin {
 
 		this.registerEvent(
 			this.app.workspace.on("file-menu", (menu: Menu, file: TAbstractFile) => {
-				if (!(file instanceof TFile) || file.extension.toLowerCase() !== "md") return;
+				if (!(file instanceof TFile) || !isConvertibleNotePath(file.path)) return;
 				menu.addItem((item) =>
 					item
 						.setTitle("Convert document ↔ table")
@@ -307,7 +307,7 @@ export default class TableConverterPlugin extends Plugin {
 				"editor-menu",
 				(menu: Menu, editor: Editor, info: MarkdownView | MarkdownFileInfo) => {
 					const file = info.file;
-					if (!file) return;
+					if (!file || !isConvertibleNotePath(file.path)) return;
 					if (editor.somethingSelected()) {
 						menu.addItem((item) =>
 							item

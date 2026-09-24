@@ -7,6 +7,7 @@ import {
 	getErrorNotePath,
 	getOutputPaths,
 	formatErrorsAsNote,
+	isConvertibleNotePath,
 } from "../node_modules/.cache/table-converter-tests/converter.bundled.mjs";
 
 const DOC1 = `# Table Title
@@ -297,9 +298,16 @@ describe("T16 validation failure -> errors note (pure helpers)", () => {
 });
 
 describe("T17 backup path", () => {
-	it("uses .BAK suffix in same folder", () => {
-		assert.equal(getBackupPath("Note.md"), "Note.md.BAK");
-		assert.equal(getBackupPath("F/Note.md"), "F/Note.md.BAK");
+	it("inserts .BAK before the .md extension, in the same folder", () => {
+		assert.equal(getBackupPath("Note.md"), "Note.BAK.md");
+		assert.equal(getBackupPath("F/Note.md"), "F/Note.BAK.md");
+	});
+	it("matches the .md extension case-insensitively", () => {
+		assert.equal(getBackupPath("Note.MD"), "Note.BAK.md");
+	});
+	it("falls back to appending .BAK.md for a non-.md source name", () => {
+		assert.equal(getBackupPath("Note"), "Note.BAK.md");
+		assert.equal(getBackupPath("F/Note.txt"), "F/Note.txt.BAK.md");
 	});
 });
 
@@ -534,8 +542,8 @@ describe("backslash escaping is targeted, not wholesale doubling", () => {
 describe("item 4: getOutputPaths", () => {
 	it("derives backup/error paths and display names from a source path", () => {
 		const p = getOutputPaths("Folder/Note.md");
-		assert.equal(p.backupPath, "Folder/Note.md.BAK");
-		assert.equal(p.backupName, "Note.md.BAK");
+		assert.equal(p.backupPath, "Folder/Note.BAK.md");
+		assert.equal(p.backupName, "Note.BAK.md");
 		assert.equal(p.errorPath, "Folder/Note.errors.md");
 		assert.equal(p.errorName, "Note.errors.md");
 	});
@@ -543,15 +551,39 @@ describe("item 4: getOutputPaths", () => {
 		const p = getOutputPaths("Note.md");
 		assert.equal(p.backupPath, getBackupPath("Note.md"));
 		assert.equal(p.errorPath, getErrorNotePath("Note.md"));
-		assert.equal(p.backupName, "Note.md.BAK");
+		assert.equal(p.backupName, "Note.BAK.md");
 		assert.equal(p.errorName, "Note.errors.md");
 	});
 	it("handles a source path without a .md extension", () => {
 		const p = getOutputPaths("Folder/Note");
-		assert.equal(p.backupPath, "Folder/Note.BAK");
-		assert.equal(p.backupName, "Note.BAK");
+		assert.equal(p.backupPath, "Folder/Note.BAK.md");
+		assert.equal(p.backupName, "Note.BAK.md");
 		assert.equal(p.errorPath, "Folder/Note.errors.md");
 		assert.equal(p.errorName, "Note.errors.md");
+	});
+});
+
+describe("isConvertibleNotePath", () => {
+	it("accepts an ordinary Markdown note", () => {
+		assert.equal(isConvertibleNotePath("Note.md"), true);
+		assert.equal(isConvertibleNotePath("Folder/Sub/Note.md"), true);
+	});
+	it("rejects a non-Markdown file", () => {
+		assert.equal(isConvertibleNotePath("Note.txt"), false);
+		assert.equal(isConvertibleNotePath("Note"), false);
+	});
+	it("rejects this plugin's own backup notes, case-insensitively", () => {
+		assert.equal(isConvertibleNotePath("Note.BAK.md"), false);
+		assert.equal(isConvertibleNotePath("Note.bak.md"), false);
+		assert.equal(isConvertibleNotePath("Folder/Note.Bak.Md"), false);
+	});
+	it("rejects this plugin's own error notes, case-insensitively", () => {
+		assert.equal(isConvertibleNotePath("Note.errors.md"), false);
+		assert.equal(isConvertibleNotePath("Note.ERRORS.md"), false);
+	});
+	it("does not reject a note that merely contains 'bak' or 'errors' mid-name", () => {
+		assert.equal(isConvertibleNotePath("Notebak.md"), true);
+		assert.equal(isConvertibleNotePath("MyErrorsLog.md"), true);
 	});
 });
 

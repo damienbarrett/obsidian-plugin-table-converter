@@ -51,6 +51,8 @@ Three commands are available from the command palette:
 
 Both convert commands automatically detect whether the input is a document or a table and convert it to the other format.
 
+None of the three commands (or their menu items) are offered for one of the plugin's own generated notes — a backup (`*.BAK.md`) or an error note (`*.errors.md`) — since converting or transposing those doesn't make sense.
+
 The same actions are available from the right-click menu:
 
 - The file menu (right-click a Markdown file, e.g. in the file explorer) shows **Convert document ↔ table** and **Transpose rows ↔ columns**.
@@ -70,8 +72,8 @@ The title stays the same; original column titles become row titles (ordered by f
 ## Settings
 
 - **Backup location** — where to save a copy of the note before converting it:
-  - *Same folder as the note* (default) — creates a `.BAK` file next to the source note.
-  - *Dedicated backup folder* — saves the backup into a configurable vault folder (default: "Table Converter backups"), mirroring the note's own folder structure underneath it (e.g. `Projects/Notes.md` backs up to `Table Converter backups/Projects/Notes.md.BAK`), so notes with the same name in different folders don't collide. Folders are created automatically if missing.
+  - *Same folder as the note* (default) — creates a `Note.BAK.md` file next to the source note (for `Note.md`).
+  - *Dedicated backup folder* — saves the backup into a configurable vault folder (default: "Table Converter backups"), mirroring the note's own folder structure underneath it (e.g. `Projects/Notes.md` backs up to `Table Converter backups/Projects/Notes.BAK.md`), so notes with the same name in different folders don't collide. Folders are created automatically if missing.
   - *Off* — no backup is written. Selection conversions never write a backup, regardless of this setting; use undo instead.
 - **Error reporting** — how conversion errors are reported when validation fails:
   - *Dialog* (default) — shows a dialog listing each error with its line number; clicking an error jumps the editor to that line if the note is open.

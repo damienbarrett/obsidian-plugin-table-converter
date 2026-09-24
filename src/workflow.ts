@@ -97,7 +97,7 @@ function opChangedMessage(op: Operation): string {
 
 // Mirrors the note's vault-relative folder structure under the backup
 // folder, so e.g. "Projects/Notes.md" and "Archive/Notes.md" don't collide
-// on a shared "Notes.md.BAK".
+// on a shared "Notes.BAK.md".
 function backupPathFor(settings: WorkflowSettings, sameFolderPath: string): string {
 	if (settings.backupMode === "folder") {
 		return `${settings.backupFolder}/${sameFolderPath}`;

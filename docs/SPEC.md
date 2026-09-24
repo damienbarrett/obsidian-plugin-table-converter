@@ -2,147 +2,109 @@
 
 ##### Purpose
 
--   Transform a heading-based Markdown document to a Markdown table.
--   Transform the Markdown table back to the heading-based document.
--   Preserve meaningful content during either transformation.
+-   **Convert.** Transform a heading-based document to a Markdown table and back.
+-   **Transpose.** Swap rows and columns in either format.
+-   **Preserve content.** Keep meaningful content through the conversion and transposition.
 
-##### Document Structure
+##### Differences from the provided specification
 
--   `#` = table title.
--   `##` = row title.
--   `###` = column title.
--   Content beneath a `###` heading = cell content.
--   `####` and deeper headings are cell content, not table structure.
--   **Single title**. Exactly one `#` heading, before the first `##`.
--   **Rows required**. At least one `##` heading.
--   **Heading order**. A `###` before the first `##` is an error.
--   Each row title must be unique.
--   Each column title within a row must be unique.
--   **Title matching**. Titles match by exact, case-sensitive text after trimming whitespace.
--   **Row without columns**. A `##` with no `###` is invalid. There should be headings with no content for empty cells. 
--   Content directly below `#`, before the first `##`, is an error.
--   Content directly below `##`, before the first `###`, is an error.
+This document is the provided specification, corrected to match the plugin as built. The changes:
 
-##### Table Structure
+-   ==**Backslash escaping.** Only a run of backslashes immediately before `|` or `<br>` is doubled (parity rule: an odd run is escaped — the leftover backslash is the marker; an even run is literal backslashes followed by a real separator/break); other backslashes are written unchanged. Doubling every `\` would corrupt LaTeX (`$\frac{a}{b}$`), code spans, and Windows paths in the rendered table, and would change how 1.0.0-written tables decode. The text still round-trips.==
+-   ==**Settings exist.** A settings tab adds a backup location (same folder — default, a dedicated mirrored backup folder, or off) and an error output (a dialog — default, or an error note).==
+-   ==**Error output default.** Failure is reported via a dialog listing every error with clickable, line-jumping links by default; the `Note.errors.md` note is opt-in. A stale error note is deleted on success in both modes, via the vault's trash (following the user's Obsidian trash preference).==
+-   ==**Extra command: `Convert selection ↔ table`.** An editor command that converts just the current selection in place. It writes no backup (relies on the editor's undo), does not treat a leading `---` line in the selection as front matter, and reports error line numbers relative to the whole note. Transpose remains whole-note only.==
+-   ==**Menus.** A file-menu item and editor-menu items expose the same commands, in addition to the command palette.==
+-   ==**Commands hidden for the plugin's own generated notes.** The convert/transpose commands and menu items are not offered for a note whose name ends `.BAK.md` or `.errors.md` (case-insensitive).==
+-   ==**Atomic write with a race check.** The final write uses Obsidian's `vault.process`; if the note changed underneath the conversion between validation/backup and the write, the write aborts unchanged and is reported instead of silently overwriting newer content.==
+-   ==**minAppVersion 1.6.6.** Required because deleting a stale error note uses `FileManager.trashFile`, added in Obsidian 1.6.6.==
 
--   **Single table**. Header row, delimiter row, then one or more body rows.
--   **Column count**. Every row has the same number of cells as the header.
--   **Headers**. Header cells are non-empty and unique.
--   **Row titles**. First-column body cells are non-empty and unique.
--   **Alignment**. Delimiter-row alignment (`:---`, `:---:`, `---:`) is not preserved.
+##### Document Format
+
+-   **Title.** Exactly one `#` heading, before the first `##`.
+-   **Rows.** At least one `##` heading; each row title is unique.
+-   **Columns.** Each row has at least one `###` heading; column titles within a row are unique.
+-   **Cells.** Content beneath a `###` belongs to that cell. `####` and deeper headings are cell content.
+-   **Empty cells.** Use a `###` heading with no content.
+-   **Heading order.** A `###` before the first `##` is invalid.
+-   **Unexpected content.** Content between `#` and the first `##`, or between `##` and its first `###`, is invalid.
+-   **Title matching.** Compare titles case-sensitively after trimming surrounding whitespace.
+
+##### Table Format
+
+-   **Single table.** One header row, one delimiter row, and at least one body row; only surrounding blank lines are allowed.
+-   **Column count.** Every body row has the header's number of cells.
+-   **Headers.** Header cells are non-empty and unique.
+-   **Row titles.** First-column body cells are non-empty and unique.
+-   **Alignment.** Accept delimiter alignment but do not preserve it.
+-   **Physical rows.** When in 'table mode' each row occupies one line. Line breaks within cells use `<br>`.
+
+##### Shared Input Rules
+
+-   **Front matter.** Allow YAML front matter at the top and exclude it from format detection. ==(`Convert selection ↔ table` does not treat a leading `---` line within the selection as front matter — see Plugin and Workflow.)==
+-   **Detection.** After front matter, accept only a valid document or a single valid table. Otherwise, fail without guessing.
+-   **Empty input.** A note with no body after front matter fails detection.
+-   **Fenced code.** Ignore headings and table syntax inside backtick or tilde fences when identifying structure.
+-   **Nested tables.** A Markdown table in a document cell section is invalid; table-like text inside a fenced code block is allowed.
+-   **Whitespace.** Ignore surrounding blank lines when identifying cell content.
+-   **Line endings.** Accept CRLF or LF; write LF and end the note with exactly one newline.
 
 ##### Document → Table
 
--   Use the `#` heading as the first table header.
--   Use each unique `###` heading as a column header.
--   Use each `##` heading as the first cell of its row.
--   Place each section's content in its corresponding cell.
--   Determine column order from each column's first occurrence.
--   Create an empty cell when a row has no content for a column.
--   Use `<br>` for a line break and `<br><br>` for a paragraph break within cells.
--   Preserve lists within cells. Separate list items with `<br>`.
--   Escape `|` characters where required by Markdown table syntax. Use `\|`, including in wikilink aliases (`[[Note\|Alias]]`).
--   **Literal `<br>`**. Escape existing `<br>` text as `\<br>`.
--   **Output format**. Use `| --- |` delimiters and no column padding, as in the example.
+-   **Headers.** Use `#` for the first header and each distinct `###` title for the remaining headers, ordered by first occurrence.
+-   **Rows.** Use each `##` title for the first cell of its row.
+-   **Cells.** Place each section's content under its matching header; use an empty cell when that column is absent from a row.
+-   **Header conflict.** Fail if the `#` title matches a column title, since table headers must be unique.
+-   **Breaks.** Encode a line break as `<br>` and a paragraph break as `<br><br>`; keep list markers and separate list items with `<br>`.
+-   **Pipes.** Escape literal `|` as `\|`, including in wikilink aliases.
+-   **Literal breaks.** Escape existing `<br>` text as `\<br>`.
+-   **Backslashes.** ~~Escape existing `\` as `\\` before encoding pipes and literal `<br>` text, so the original text can be restored.~~ ==Only a run of backslashes immediately before a `|` or a literal `<br>` is doubled (an odd run is escaped — the leftover backslash is the marker; an even run is literal backslashes followed by a real separator/break). Backslashes elsewhere (e.g. `C:\Users`, `\frac{a}{b}`) are written unchanged. See Differences, above.==
+-   **Output.** Use `| --- |` delimiters without column padding.
 
 ##### Table → Document
 
--   Convert the first table header to `#`.
--   Convert each first-column body cell to `##`.
--   Convert each remaining table header to `###` beneath every row.
--   Place the corresponding cell content beneath each `###` heading.
--   Always create the `###` heading, even when its cell is empty.
--   Convert `<br>` representations back to document line or paragraph breaks.
--   Preserve lists where possible.
--   **Unescape**. Restore `\|` to `|` and `\<br>` to `<br>`.
--   **Spacing**. One blank line between each heading and content block.
-
-##### Content Handling
-
--   Preserve inline Markdown where possible.
--   Preserve links, emphasis, inline code, tags, and lists.
--   Do not interpret headings inside fenced code blocks as document structure.
--   Do not interpret table syntax inside fenced code blocks as the table to transform.
--   **Nested tables**. A Markdown table inside a cell section is an error.
--   Ignore surrounding blank lines when identifying cell content.
--   Allow YAML front matter at the top of the note.
--   Ignore front matter when detecting whether the note is a document or table.
--   Preserve front matter exactly as written during conversion.
--   **Line endings**. Accept CRLF or LF. Write LF and end the note with one newline.
-
-##### Plugin Form
-
--   Implement as an Obsidian community plugin.
--   Support both macOS and iOS as first-class platforms.
--   Use only Obsidian APIs and browser-compatible functionality available on both platforms.
--   Do not require Node.js, Electron-only APIs, shell commands, or other desktop-only dependencies.
-
-##### User Workflow
-
--   Provide one command: `Convert document ↔ table`.
--   The command operates on the entire active note.
--   **Availability**. The command is available only when the active file is a Markdown note.
--   The command detects the current supported format and converts to the other format.
--   Replace the active note in place after a successful conversion.
--   Do not perform partial conversions.
--   Do not modify the source note when validation or format detection fails.
--   **Feedback**. Show an Obsidian notice on success or failure.
+-   **Title and rows.** Convert the first header to `#` and each first-column body cell to `##`.
+-   **Columns.** Add a `###` heading for every remaining header beneath every row, including empty cells.
+-   **Content.** Restore `<br>` as line breaks and `<br><br>` as paragraph breaks; preserve lists where possible.
+-   **Escapes.** ~~Decode `\\`, `\|`, and `\<br>` to their literal forms; interpret only unescaped `<br>` as a break.~~ ==Apply the same backslash-parity rule used for encoding: a backslash run immediately before `|` or `<br>` is halved, and an odd run leaves that `|` or `<br>` as literal text; interpret only an unescaped (even-preceding-backslash) `<br>` as a break. Backslashes elsewhere in the cell are left exactly as written, since they were never doubled on the way in. See Differences, above.==
+-   **Spacing.** Put one blank line between each heading and its content block.
 
 ##### Transpose
 
--   Provide one command: `Transpose rows ↔ columns` (id `transpose-rows-columns`).
--   The command operates on the entire active note, in place. **Availability**: only when the active file is a Markdown note. Selection-only transpose is out of scope.
--   **Format**. Keep the input format: a document transposes to a document; a table transposes to a table.
--   **Title**. The `#` title, or the first table header, is unchanged.
--   **Axes**. Original column titles become row titles, ordered by first occurrence. Original row titles become column titles, in their original order.
--   **Cells**. Move each cell to its transposed position. Create an empty cell, or an empty `###` section, wherever the original omitted a column.
--   **Header conflict**. Fail if the unchanged title would equal a new column title (i.e. an original row title); titles are never renamed to avoid a conflict.
--   **Output**. Apply the same escaping, spacing, front-matter, and line-ending rules as conversion; the same validation applies to the input. Same backup, backup-failure, stale-error, error-output, atomic-write, and race rules as conversion, via the same workflow path.
--   Available from the command palette, the file menu (for Markdown files), and the editor menu (whole note only; not shown alongside the selection-conversion item). No default hotkey.
--   See the Example section below for a worked transpose of the first example.
+-   **Format.** Keep the input format: document → document or table → table.
+-   **Title.** Keep the `#` title or first table header unchanged.
+-   **Axes.** Original column titles become row titles, ordered by first occurrence. Original row titles become column titles, in their original order.
+-   **Cells.** Move each cell to its transposed position. Create an empty cell or section wherever the original document omitted a column.
+-   **Header conflict.** Fail if the unchanged title matches a new column title; do not rename titles.
+-   **Output.** Apply the same escaping, spacing, and line-ending rules as conversion.
+-   ==**Selection.** There is no selection-only transpose; it always operates on the whole note.==
 
-##### Format Detection
+##### Plugin and Workflow
 
--   If the remaining note is entirely one valid Markdown table, treat it as table input.
--   If the remaining note strictly follows the defined `#` → `##` → `###` hierarchy, treat it as document input.
--   Otherwise, fail validation.
--   Do not use fuzzy detection or guess the intended format.
--   **Empty note**. A note with no body after the front matter fails detection.
+-   **Plugin.** Implement as an Obsidian community plugin using only Obsidian APIs and browser-compatible functionality available on macOS and iOS.
+-   ~~**Command.** Provide one command: `Convert document ↔ table`.~~
+-   **Commands.** ~~Provide `Convert document ↔ table` and `Transpose rows ↔ columns`.~~ ==Provide `Convert document ↔ table`, `Transpose rows ↔ columns`, and `Convert selection ↔ table` (an editor command, available only with a non-empty selection; converts just the selection in place and writes no backup — see Differences, above).==
+-   **Availability.** ~~Offer commands only when the active file is a Markdown note.~~ ==Offer the whole-note commands only when the active file is a Markdown note that is not one of the plugin's own generated notes (a name ending `.BAK.md` or `.errors.md`, case-insensitive). Offer the selection command under the same file restriction, plus a non-empty editor selection.==
+-   **Scope.** ~~Each command operates on the entire active note and replaces it in place after success.~~ ==Each whole-note command operates on the entire active note and replaces it in place after success; `Convert selection ↔ table` operates only on the current selection and replaces just that text.==
+-   **Validation.** Validate the complete note before writing; never partially convert or transpose it. ==(`Convert selection ↔ table` validates the complete selection the same way.)==
+-   **Feedback.** ~~Show an Obsidian notice on success or failure.~~ ==Show an Obsidian notice on success or failure; a success notice also states where the backup was written, or that it was skipped, and a failure notice states how the errors were reported.==
+-   ==**Menus.** A file-menu item, for any Markdown file eligible for the commands, offers `Convert document ↔ table` and `Transpose rows ↔ columns`. An editor-menu item offers `Convert selection ↔ table` when there is a selection, otherwise the same two whole-note items. No default hotkeys.==
+-   **Settings.** ~~V1 has no user-configurable settings.~~ ==Backup location (same folder — default, dedicated backup folder, or off) and error output (dialog — default, or an error note) are configurable from a settings tab; see Backup and Errors.==
+-   **Compatibility.** The same input and command produce the same output on macOS and iOS. ==(Requires Obsidian 1.6.6+; see Differences, above.)==
 
-##### Validation
+##### Backup and Errors
 
--   Validate the complete note before changing it.
--   If any validation error exists, abort the conversion.
--   Report all detected validation errors where practical, rather than stopping at the first error.
--   Include enough information to locate each error, such as the relevant heading, row, column, or line when available. Always include the line number.
+-   **Backup.** ~~Before replacing the source, create or overwrite a backup in the same folder.~~ ==Before replacing the source, create or overwrite a backup: in the same folder as the source (default), in a mirrored path under a configurable backup folder (e.g. `<backupFolder>/Projects/Notes.BAK.md` for `Projects/Notes.md`), or not at all if backups are turned off.==
+-   **Backup name.** Use `Note.BAK.md` for `Note.md`.
+-   **Backup failure.** Abort without changing the source if the backup cannot be written.
+-   **Error note.** ~~On failure, create or overwrite `Note.errors.md` in the source folder, explaining why the source was not changed.~~ ==On failure, report why the source was not changed: by default, a dialog listing all errors with clickable line numbers; when the error-output setting is "Error note", create or overwrite `Note.errors.md` in the source folder instead.==
+-   **Stale errors.** ~~Delete an existing error note after successful replacement.~~ ==Delete an existing `Note.errors.md`, if present, after a successful replacement — regardless of which error-output mode is currently active — via the vault's trash (following the user's Obsidian trash preference).==
+-   **Validation failures.** Do not create or replace the backup when validation fails.
+-   **Diagnostics.** Report all detectable validation errors where practical. Identify the relevant heading, row, or column, and always include a line number.
+-   ==**Race.** The final write is atomic (`vault.process`); if the note changed underneath the conversion between validation/backup and the write, the write is aborted unchanged and reported as an error instead of overwriting the newer content.==
+-   ==**Selection.** `Convert selection ↔ table` writes no backup (the editor's undo covers it); failures are reported via the error-output setting (dialog, or `Note.errors.md` for the whole note), with line numbers relative to the whole note.==
 
-##### Backup Behaviour
-
--   Before a successful in-place conversion, create a backup in the same folder as the source note.
--   Use a `.BAK` suffix for the backup file. 
--   Overwrite an existing backup with the same backup name.
--   Do not create or replace the backup when validation fails and the source note is not modified.
--   **Backup failure**. If the backup cannot be written, abort without modifying the source.
-
-##### Error Reporting
-
--   On failure, create an error note in the same folder as the source note.
--   Use the source note name with an `.errors` suffix. Name: `Note.errors.md`.
--   Overwrite an existing error note with the same error-note name.
--   The error note must explain why conversion did not occur.
--   **Stale errors**. Delete an existing error note after a successful conversion.
-
-##### Settings
-
--   V1 has no user-configurable settings.
--   Hard-code the agreed transformation, backup, error-reporting, and compatibility behaviour.
-
-##### Scope
-
--   The same input should produce the same output on both platforms.
--   Selection-based conversion is explicitly out of scope for V1.
-
-##### Example
+##### Examples
 
 ```markdown
 # Table Title
@@ -175,7 +137,7 @@ B2 text.
 | Row 2 Title | A2 text. | B2 text. |
 ```
 
--   **Transpose example**. Transposing either form above (keeping its own format) yields the equivalent of:
+**Transpose either example above:**
 
 ```markdown
 | Table Title | Row 1 Title | Row 2 Title |
@@ -184,7 +146,7 @@ B2 text.
 | Column B Title | B1 text. | B2 text. |
 ```
 
--   **Second example**. Breaks, lists and pipes (below).
+**Breaks, lists, and pipes:**
 
 ```markdown
 # Tasks
@@ -212,43 +174,35 @@ New paragraph with a | pipe.
 
 ##### Acceptance Tests
 
--   T01 — Valid document converts to the expected table.
--   T02 — Valid table converts to the expected document.
--   T03 — Document → table → document preserves meaningful content.
--   T04 — YAML front matter is preserved exactly and ignored for format detection.
--   T05 — A row missing a defined column produces an empty table cell.
--   T06 — An empty table cell produces an empty `###` section.
--   T07 — Paragraph breaks and lists survive conversion using the defined `<br>` representation.
--   T08 — `####` and deeper headings survive as cell content.
--   T09 — Fenced-code content is treated as text without being misread as document structure or a table.
--   T10 — Literal `|` characters are escaped and restored correctly.
--   T11 — A duplicate `###` heading within one row fails validation and produces an error note.
--   T12 — A duplicate `##` row title fails validation and produces an error note.
--   T13 — Content between `#` and the first `##` fails validation.
--   T14 — Content between a `##` heading and its first `###` fails validation.
--   T15 — Input that is neither a valid document nor one valid Markdown table fails detection.
--   T16 — Validation failure leaves the source note unchanged and creates or overwrites the `.errors` note.
--   T17 — Successful conversion creates or overwrites the `.BAK` note before replacing the source.
--   T18 — The same test inputs produce the same results on macOS and iOS.
--   T19 — More than one `#` heading fails validation.
--   T20 — Table rows with mismatched cell counts fail validation.
--   T21 — Empty or duplicate table headers fail validation.
--   T22 — An empty note fails detection.
--   T23 — Literal `<br>` text round-trips as text.
--   T24 — Successful conversion deletes a stale `.errors` note.
--   T25 — Backup write failure leaves the source unchanged.
--   T26 — Transposing a document → document and a table → table (the example above, both formats) swaps rows and columns as expected.
--   T27 — Transposing twice restores cell positions and meaningful content: byte-identical for a dense input; for a sparse document, the second transpose leaves empty `###` sections where columns were missing (content-equal, not byte-identical).
--   T28 — A sparse document's rows without a given column produce empty cells/sections in the missing positions after transpose.
--   T29 — Transposing rejects a transposition that would duplicate a header (title equals an original row title): the source is left unchanged and the error is reported (error-note mode writes the note; modal mode writes no file).
--   T30 — Backup, stale-error, validation-failure, and race rules apply to transpose, exercised via the workflow tests' fake adapter.
+-   **T01–T03.** Convert each valid format as shown; a round trip preserves meaningful content.
+-   **T04.** Preserve YAML front matter text and ordering while normalizing line endings.
+-   **T05–T06.** Missing document columns become empty table cells; empty table cells become empty `###` sections.
+-   **T07–T10.** Preserve paragraphs, lists, deeper headings, fenced code, and literal pipes.
+-   **T11–T14.** Reject duplicate row or within-row column titles and content in either forbidden gap.
+-   **T15–T16.** Reject unsupported input without changing the source; ==report why, via the dialog by default or the error note when that setting is selected==.
+-   **T17–T18.** Create or overwrite the backup before replacement; produce identical results on macOS and iOS.
+-   **T19–T22.** Reject multiple `#` headings, mismatched table rows, empty or duplicate headers, and empty input.
+-   **T23.** Round-trip literal `<br>` as text.
+-   **T24–T25.** Delete stale errors after success ==in both error-output modes==; leave the source unchanged if backup writing fails.
+-   **T26.** Transpose a document and a table into their respective formats.
+-   **T27.** Transposing twice restores cell positions and meaningful content.
+-   **T28.** Transpose sparse document rows with empty cells in the missing positions.
+-   **T29.** Reject a transposition that would duplicate a table header; leave the source unchanged and report the error==, in both error-output modes==.
+-   **T30.** Apply backup, stale-error, validation, and race rules to transposition ==(exercised against a fake vault adapter that stands in for both platforms, since the underlying logic is pure and platform-free)==.
 
-Also covered: multi-line cells, lists, `<br>`/pipe/backslash content, wikilink aliases with `|`, deeper headings, and fenced code inside cells all survive transpose in both formats and survive transpose → convert → transpose → convert.
+Also covered, beyond T01–T30:
+
+-   ==**Backslash parity.** Targeted escaping of only the backslash run immediately before `|` or `<br>` (not blanket doubling): LaTeX, a code-span Windows path, and an unrelated backslash pair all round-trip untouched; a run's parity determines whether it is escaped; a 1.0.0-style literal `\\` pair decodes unchanged.==
+-   ==**Settings modes.** Backup location (same folder, dedicated folder — including mirrored nested paths and no collision between same-named notes in different folders — and off) and error output (dialog vs. error note) are each exercised for both convert and transpose.==
+-   ==**Race.** A note that changes between validation/backup and the atomic write aborts unchanged and is reported, for both convert and transpose.==
+-   ==**Selection.** Converting a selection fragment (with and without a trailing newline, and with surrounding blank lines) succeeds without writing a backup; validation-error line numbers are shifted to be note-relative; a leading `---` in the selection is treated as content, not front matter.==
+-   ==**Title/column header conflict.** A document `###` column title equal to the `#` title is rejected, with a line number, before it could produce a duplicate table header.==
+-   ==**Filename and availability helpers.** `getOutputPaths`/`getBackupPath`/`getErrorNotePath` are pinned down directly, including for a source name without a `.md` extension. `isConvertibleNotePath` is pinned down rejecting the plugin's own `.BAK.md`/`.errors.md` notes case-insensitively, while accepting an ordinary note whose name merely contains "bak" or "errors".==
+-   Multi-line cells, lists, `<br>`/pipe/backslash content, wikilink aliases with `|`, deeper headings, and fenced code inside cells all survive transpose in both formats and survive transpose → convert → transpose → convert.
 
 ##### Future Considerations
 
--   Selection-only conversion.
--   Revisit whether `.BAK` files remain necessary after the plugin is mature.
--   Revisit richer fenced-code-block round-tripping after observing real examples.
--   Add configurable settings only where actual usage justifies them.
-
+-   **Selection.** ~~Consider selection-only operations after V1.~~ ==Partly done: selection-only convert has shipped (`Convert selection ↔ table`); selection-only transpose remains a future consideration.==
+-   **Backups.** ~~Revisit whether `.BAK` files remain necessary.~~ ==Whether backup notes remain necessary at all is still open. In the meantime they are named `Note.BAK.md` (a Markdown note, not `Note.md.BAK`), and their location is configurable (same folder, dedicated folder, or off) — see Backup and Errors.==
+-   **Fenced code.** Revisit richer fenced-code-block round-tripping after observing real examples.
+-   **Settings.** ~~Add settings only where usage justifies them.~~ ==Backup location and error output are now configurable; add further settings only where usage justifies them.==

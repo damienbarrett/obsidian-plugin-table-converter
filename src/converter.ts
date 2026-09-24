@@ -81,8 +81,15 @@ interface GridWithLines extends Grid {
 // Filename helpers (pure, testable)
 // ---------------------------------------------------------------------------
 
+// Inserts ".BAK" immediately before the ".md" extension (matched
+// case-insensitively), so a Markdown note's backup is itself a Markdown
+// note (e.g. "Note.md" -> "Note.BAK.md"). A source path that doesn't end in
+// ".md" has no extension to insert before, so ".BAK.md" is appended instead.
 export function getBackupPath(sourcePath: string): string {
-	return `${sourcePath}.BAK`;
+	if (sourcePath.toLowerCase().endsWith(".md")) {
+		return `${sourcePath.slice(0, -3)}.BAK.md`;
+	}
+	return `${sourcePath}.BAK.md`;
 }
 
 export function getErrorNotePath(sourcePath: string): string {
@@ -95,6 +102,19 @@ export function getErrorNotePath(sourcePath: string): string {
 function basenameOf(path: string): string {
 	const parts = path.split("/");
 	return parts[parts.length - 1] ?? path;
+}
+
+// Whether the convert/transpose commands and menu items should be offered
+// for a note at this path: only for Markdown notes that aren't themselves
+// one of this plugin's own generated notes (a backup or an error note),
+// since converting or transposing those doesn't make sense. Matched
+// case-insensitively, consistent with getBackupPath/getErrorNotePath.
+export function isConvertibleNotePath(path: string): boolean {
+	const lower = path.toLowerCase();
+	if (!lower.endsWith(".md")) return false;
+	if (lower.endsWith(".bak.md")) return false;
+	if (lower.endsWith(".errors.md")) return false;
+	return true;
 }
 
 export interface OutputPaths {
