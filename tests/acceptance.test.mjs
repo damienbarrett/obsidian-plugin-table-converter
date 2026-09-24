@@ -2,6 +2,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
 	convertNote,
+	transposeNote,
 	getBackupPath,
 	getErrorNotePath,
 	getOutputPaths,
@@ -64,6 +65,44 @@ function okOut(input) {
 	assert.equal(r.ok, true, `expected ok, got errors: ${JSON.stringify(r.errors)}`);
 	return r;
 }
+
+function okTranspose(input) {
+	const r = transposeNote(input);
+	assert.equal(r.ok, true, `expected ok, got errors: ${JSON.stringify(r.errors)}`);
+	return r;
+}
+
+// Same data as DOC1/TABLE1, transposed: original column titles become row
+// titles (by first occurrence), original row titles become column titles
+// (in original order); the title is unchanged.
+const DOC1_TRANSPOSED = `# Table Title
+
+## Column A Title
+
+### Row 1 Title
+
+A1 text.
+
+### Row 2 Title
+
+A2 text.
+
+## Column B Title
+
+### Row 1 Title
+
+B1 text.
+
+### Row 2 Title
+
+B2 text.
+`;
+
+const TABLE1_TRANSPOSED = `| Table Title | Row 1 Title | Row 2 Title |
+| --- | --- | --- |
+| Column A Title | A1 text. | A2 text. |
+| Column B Title | B1 text. | B2 text. |
+`;
 
 describe("T01 valid document -> table", () => {
 	it("converts example 1", () => {
@@ -573,5 +612,185 @@ describe("selection support: convertNote on a fragment", () => {
 		const r = convertNote(DOC1);
 		assert.equal(r.ok, true);
 		assert.equal(r.output, TABLE1);
+	});
+});
+
+describe("title vs column-title conflict fails (document)", () => {
+	// Converting to a table puts the "#" title and every "###" column title
+	// in the same header row, so a column title equal to the title would
+	// produce a duplicate table header. The table format already rejects a
+	// duplicate header; the document format must too.
+	it("a '###' column equal to the '#' title fails, with a line number", () => {
+		const doc = "# T\n\n## R\n\n### T\n\nx\n";
+		const r = convertNote(doc);
+		assert.equal(r.ok, false);
+		assert.ok(r.errors.some((e) => /matches the table title/i.test(e.message)));
+		assert.ok(r.errors.every((e) => Number.isInteger(e.line) && e.line > 0));
+	});
+	it("does not false-positive when titles merely share a substring", () => {
+		const doc = "# Tasks\n\n## R\n\n### Task\n\nx\n";
+		const r = convertNote(doc);
+		assert.equal(r.ok, true);
+	});
+});
+
+describe("T26 transpose swaps rows and columns", () => {
+	it("document -> document", () => {
+		const r = okTranspose(DOC1);
+		assert.equal(r.format, "document");
+		assert.equal(r.output, DOC1_TRANSPOSED);
+	});
+	it("table -> table", () => {
+		const r = okTranspose(TABLE1);
+		assert.equal(r.format, "table");
+		assert.equal(r.output, TABLE1_TRANSPOSED);
+	});
+	it("keeps the title unchanged and each format's own header/title", () => {
+		const doc = okTranspose(DOC1);
+		assert.ok(doc.output.startsWith("# Table Title\n"));
+		const table = okTranspose(TABLE1);
+		assert.ok(table.output.startsWith("| Table Title |"));
+	});
+});
+
+describe("T27 double transpose restores cell positions and content", () => {
+	it("dense document: byte-identical after two transposes", () => {
+		const once = okTranspose(DOC1);
+		const twice = okTranspose(once.output);
+		assert.equal(twice.output, DOC1);
+	});
+	it("dense table: byte-identical after two transposes", () => {
+		const once = okTranspose(TABLE1);
+		const twice = okTranspose(once.output);
+		assert.equal(twice.output, TABLE1);
+	});
+	it("sparse document: content-equal (not byte-identical) after two transposes", () => {
+		// R2 has no B column, so it is not byte-identical: the second
+		// transpose leaves behind an explicit, empty "### B" section for R2
+		// where the original simply omitted the heading. The content -
+		// which cells are populated and with what - is unchanged.
+		const doc = "# T\n\n## R1\n\n### A\n\nx\n\n### B\n\ny\n\n## R2\n\n### A\n\nz\n";
+		const once = okTranspose(doc);
+		const twice = okTranspose(once.output);
+		assert.notEqual(twice.output, doc);
+		assert.ok(twice.output.includes("## R1\n\n### A\n\nx\n\n### B\n\ny\n"));
+		assert.ok(twice.output.includes("## R2\n\n### A\n\nz\n\n### B\n"));
+		// Converting both back to tables makes the equivalent content
+		// explicit and comparable directly.
+		const backOnce = okOut(doc);
+		const backTwice = okOut(twice.output);
+		assert.equal(backOnce.output, backTwice.output);
+	});
+});
+
+describe("T28 sparse rows -> empty cells/sections after transpose", () => {
+	it("a row missing a column produces an empty cell in the transposed table", () => {
+		const doc = "# T\n\n## R1\n\n### A\n\nx\n\n### B\n\ny\n\n## R2\n\n### A\n\nz\n";
+		const r = okTranspose(doc);
+		assert.equal(r.format, "document");
+		// Row "B" (new row, from old column B) has no data for column "R2"
+		// (old row R2 never had a B column): empty "###" section.
+		assert.ok(r.output.includes("## B\n\n### R1\n\ny\n\n### R2\n"));
+	});
+	it("an empty table cell moves to the corresponding empty cell after transposing", () => {
+		const table = "| T | A | B |\n| --- | --- | --- |\n| R1 | x |  |\n";
+		const r = okTranspose(table);
+		assert.equal(r.ok, true);
+		assert.equal(r.format, "table");
+		// Column B was empty for R1, so after transposing, row "B" has an
+		// empty cell for column "R1".
+		assert.equal(r.output, "| T | R1 |\n| --- | --- |\n| A | x |\n| B |  |\n");
+	});
+});
+
+describe("T29 header conflict rejects transpose", () => {
+	it("document: a row title equal to the title is rejected, source unchanged, error reported", () => {
+		const doc = "# Alpha\n\n## Alpha\n\n### C\n\nx\n";
+		const r = transposeNote(doc);
+		assert.equal(r.ok, false);
+		assert.ok(r.errors.length > 0);
+		assert.ok(r.errors.every((e) => Number.isInteger(e.line) && e.line > 0));
+		assert.ok(r.errors.some((e) => /Alpha/.test(e.message)));
+	});
+	it("table: a row title equal to the title is rejected", () => {
+		const table = "| Alpha | C |\n| --- | --- |\n| Alpha | x |\n";
+		const r = transposeNote(table);
+		assert.equal(r.ok, false);
+		assert.ok(r.errors.length > 0);
+	});
+	it("a row title merely equal to a column title (not the overall title) is fine", () => {
+		const doc = "# T\n\n## C\n\n### C\n\nx\n";
+		const r = transposeNote(doc);
+		assert.equal(r.ok, true);
+	});
+});
+
+describe("rich content survives transpose in both formats and through transpose<->convert", () => {
+	// Multi-line cells, lists, <br>/pipe/backslash content, a wikilink alias
+	// with "|", a deeper heading, and fenced code, all inside one cell.
+	const RICH_DOC = [
+		"# Rich",
+		"",
+		"## Row1",
+		"",
+		"### ColA",
+		"",
+		"Line one.",
+		"Line two.",
+		"",
+		"Second paragraph with a | pipe, [[Note|Alias]], a literal <br> tag, and x\\\\|y.",
+		"",
+		"- item one",
+		"- item two",
+		"",
+		"#### Deep heading",
+		"",
+		"more text",
+		"",
+		"```",
+		"## fake heading",
+		"| a | b |",
+		"| --- | --- |",
+		"```",
+		"",
+		"### ColB",
+		"",
+		"simple B text.",
+		"",
+	].join("\n");
+
+	it("document -> document transpose preserves all of it", () => {
+		const t = okTranspose(RICH_DOC);
+		assert.equal(t.format, "document");
+		assert.ok(t.output.includes("Line one.\nLine two."));
+		assert.ok(t.output.includes("a | pipe"));
+		assert.ok(t.output.includes("[[Note|Alias]]"));
+		assert.ok(t.output.includes("a literal <br> tag"));
+		// Pure document -> document transpose never escapes/unescapes table
+		// syntax, so the backslash-pipe text survives byte-for-byte.
+		assert.ok(t.output.includes("x\\\\|y"));
+		assert.ok(t.output.includes("- item one\n- item two"));
+		assert.ok(t.output.includes("#### Deep heading"));
+		assert.ok(t.output.includes("```\n## fake heading\n| a | b |\n| --- | --- |\n```"));
+	});
+
+	it("table -> table transpose preserves all of it (escaped form)", () => {
+		const asTable = okOut(RICH_DOC);
+		const t = okTranspose(asTable.output);
+		assert.equal(t.format, "table");
+		assert.ok(t.output.includes("Line one.<br>Line two."));
+		assert.ok(t.output.includes("\\| pipe"));
+		assert.ok(t.output.includes("[[Note\\|Alias]]"));
+		assert.ok(t.output.includes("\\<br> tag"));
+		assert.ok(t.output.includes("- item one<br>- item two"));
+		assert.ok(t.output.includes("#### Deep heading"));
+	});
+
+	it("survives transpose -> convert -> transpose -> convert, restoring the original document", () => {
+		const t1 = okTranspose(RICH_DOC);
+		const c1 = okOut(t1.output);
+		const t2 = okTranspose(c1.output);
+		const c2 = okOut(t2.output);
+		assert.equal(c2.output, RICH_DOC);
 	});
 });

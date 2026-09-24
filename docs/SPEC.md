@@ -88,6 +88,19 @@
 -   Do not modify the source note when validation or format detection fails.
 -   **Feedback**. Show an Obsidian notice on success or failure.
 
+##### Transpose
+
+-   Provide one command: `Transpose rows ↔ columns` (id `transpose-rows-columns`).
+-   The command operates on the entire active note, in place. **Availability**: only when the active file is a Markdown note. Selection-only transpose is out of scope.
+-   **Format**. Keep the input format: a document transposes to a document; a table transposes to a table.
+-   **Title**. The `#` title, or the first table header, is unchanged.
+-   **Axes**. Original column titles become row titles, ordered by first occurrence. Original row titles become column titles, in their original order.
+-   **Cells**. Move each cell to its transposed position. Create an empty cell, or an empty `###` section, wherever the original omitted a column.
+-   **Header conflict**. Fail if the unchanged title would equal a new column title (i.e. an original row title); titles are never renamed to avoid a conflict.
+-   **Output**. Apply the same escaping, spacing, front-matter, and line-ending rules as conversion; the same validation applies to the input. Same backup, backup-failure, stale-error, error-output, atomic-write, and race rules as conversion, via the same workflow path.
+-   Available from the command palette, the file menu (for Markdown files), and the editor menu (whole note only; not shown alongside the selection-conversion item). No default hotkey.
+-   See the Example section below for a worked transpose of the first example.
+
 ##### Format Detection
 
 -   If the remaining note is entirely one valid Markdown table, treat it as table input.
@@ -162,6 +175,15 @@ B2 text.
 | Row 2 Title | A2 text. | B2 text. |
 ```
 
+-   **Transpose example**. Transposing either form above (keeping its own format) yields the equivalent of:
+
+```markdown
+| Table Title | Row 1 Title | Row 2 Title |
+| --- | --- | --- |
+| Column A Title | A1 text. | A2 text. |
+| Column B Title | B1 text. | B2 text. |
+```
+
 -   **Second example**. Breaks, lists and pipes (below).
 
 ```markdown
@@ -215,6 +237,13 @@ New paragraph with a | pipe.
 -   T23 — Literal `<br>` text round-trips as text.
 -   T24 — Successful conversion deletes a stale `.errors` note.
 -   T25 — Backup write failure leaves the source unchanged.
+-   T26 — Transposing a document → document and a table → table (the example above, both formats) swaps rows and columns as expected.
+-   T27 — Transposing twice restores cell positions and meaningful content: byte-identical for a dense input; for a sparse document, the second transpose leaves empty `###` sections where columns were missing (content-equal, not byte-identical).
+-   T28 — A sparse document's rows without a given column produce empty cells/sections in the missing positions after transpose.
+-   T29 — Transposing rejects a transposition that would duplicate a header (title equals an original row title): the source is left unchanged and the error is reported (error-note mode writes the note; modal mode writes no file).
+-   T30 — Backup, stale-error, validation-failure, and race rules apply to transpose, exercised via the workflow tests' fake adapter.
+
+Also covered: multi-line cells, lists, `<br>`/pipe/backslash content, wikilink aliases with `|`, deeper headings, and fenced code inside cells all survive transpose in both formats and survive transpose → convert → transpose → convert.
 
 ##### Future Considerations
 

@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
 	convertFile,
 	convertSelection,
+	transposeFile,
 } from "../node_modules/.cache/table-converter-tests/workflow.bundled.mjs";
 
 // Minimal stand-in for a TFile: workflow.ts only reads .path/.name/.basename.
@@ -253,6 +254,110 @@ describe("race between validation and the atomic write", () => {
 		assert.ok(reporter.notices.some((n) => /failed/i.test(n)));
 		const errNote = adapter.files.get("Note.errors.md");
 		assert.ok(/changed during conversion/i.test(errNote));
+	});
+});
+
+describe("T30 transposeFile shares convertFile's workflow rules", () => {
+	const TRANSPOSED_DOC = "# T\n\n## C\n\n### R\n\ntext\n";
+
+	it("writes the backup, then transposes the note", async () => {
+		const file = makeFile("Note.md");
+		const adapter = new FakeAdapter({ "Note.md": DOC });
+		const reporter = new FakeReporter();
+
+		await transposeFile(adapter, reporter, file, baseSettings);
+
+		assert.equal(adapter.files.get("Note.md"), TRANSPOSED_DOC);
+		assert.equal(adapter.files.get("Note.md.BAK"), DOC);
+		assert.ok(reporter.notices.some((n) => /transposed rows ↔ columns \(document\)/.test(n)));
+	});
+
+	it("round-trips via two transposes back to the original", async () => {
+		const file = makeFile("Note.md");
+		const adapter = new FakeAdapter({ "Note.md": DOC });
+		const reporter = new FakeReporter();
+
+		await transposeFile(adapter, reporter, file, baseSettings);
+		assert.equal(adapter.files.get("Note.md"), TRANSPOSED_DOC);
+
+		await transposeFile(adapter, reporter, file, baseSettings);
+		assert.equal(adapter.files.get("Note.md"), DOC);
+	});
+
+	it("backup failure leaves the source unchanged and reports the failure", async () => {
+		const file = makeFile("Note.md");
+		const adapter = new FakeAdapter({ "Note.md": DOC });
+		adapter.failWritePaths.add("Note.md.BAK");
+		const reporter = new FakeReporter();
+
+		await transposeFile(adapter, reporter, file, baseSettings);
+
+		assert.equal(adapter.files.get("Note.md"), DOC);
+		assert.ok(adapter.files.has("Note.errors.md"));
+		assert.ok(reporter.notices.some((n) => /failed/i.test(n)));
+	});
+
+	it("validation failure: source unchanged, error note written (note mode)", async () => {
+		const file = makeFile("Note.md");
+		const adapter = new FakeAdapter({ "Note.md": INVALID });
+		const reporter = new FakeReporter();
+
+		await transposeFile(adapter, reporter, file, { ...baseSettings, errorOutput: "note" });
+
+		assert.equal(adapter.files.get("Note.md"), INVALID);
+		assert.ok(adapter.files.has("Note.errors.md"));
+		assert.equal(adapter.files.has("Note.md.BAK"), false);
+	});
+
+	it("validation failure (header conflict): source unchanged, no file written (modal mode)", async () => {
+		const file = makeFile("Note.md");
+		const conflictDoc = "# Alpha\n\n## Alpha\n\n### C\n\nx\n";
+		const adapter = new FakeAdapter({ "Note.md": conflictDoc });
+		const reporter = new FakeReporter();
+
+		await transposeFile(adapter, reporter, file, { ...baseSettings, errorOutput: "modal" });
+
+		assert.equal(adapter.files.get("Note.md"), conflictDoc);
+		assert.equal(adapter.files.has("Note.errors.md"), false);
+		assert.equal(reporter.modals.length, 1);
+		assert.ok(reporter.modals[0].errors.length > 0);
+	});
+
+	it("validation failure (header conflict), note mode: writes the error note, source unchanged", async () => {
+		const file = makeFile("Note.md");
+		const conflictDoc = "# Alpha\n\n## Alpha\n\n### C\n\nx\n";
+		const adapter = new FakeAdapter({ "Note.md": conflictDoc });
+		const reporter = new FakeReporter();
+
+		await transposeFile(adapter, reporter, file, { ...baseSettings, errorOutput: "note" });
+
+		assert.equal(adapter.files.get("Note.md"), conflictDoc);
+		assert.ok(adapter.files.has("Note.errors.md"));
+		assert.ok(reporter.notices.some((n) => /failed/i.test(n)));
+	});
+
+	it("deletes a stale error note on success", async () => {
+		const file = makeFile("Note.md");
+		const adapter = new FakeAdapter({ "Note.md": DOC, "Note.errors.md": "stale" });
+		const reporter = new FakeReporter();
+
+		await transposeFile(adapter, reporter, file, baseSettings);
+
+		assert.equal(adapter.files.has("Note.errors.md"), false);
+	});
+
+	it("aborts unchanged and reports when the note changed underneath (race)", async () => {
+		const file = makeFile("Note.md");
+		const adapter = new FakeAdapter({ "Note.md": DOC });
+		adapter.raceValue = "someone typed this in the meantime\n";
+		const reporter = new FakeReporter();
+
+		await transposeFile(adapter, reporter, file, baseSettings);
+
+		assert.equal(adapter.files.get("Note.md"), "someone typed this in the meantime\n");
+		assert.ok(reporter.notices.some((n) => /failed/i.test(n)));
+		const errNote = adapter.files.get("Note.errors.md");
+		assert.ok(/changed during transpose/i.test(errNote));
 	});
 });
 

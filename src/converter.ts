@@ -43,6 +43,38 @@ interface ParsedTable {
 	// each row. Decoding happens when rendering to document text, since the
 	// row-title and per-column decoding rules differ slightly.
 	bodyRows: string[][];
+	// Original line numbers, kept alongside the parsed cells so transpose's
+	// header-conflict check can report a location without re-scanning input.
+	headerLine: number;
+	bodyRowLines: number[];
+}
+
+// ---------------------------------------------------------------------------
+// Shared grid model (used by transpose; convert's own document/table
+// converters above work directly off ParsedDocument/ParsedTable and are left
+// unchanged).
+// ---------------------------------------------------------------------------
+//
+// Cell text is stored in the same format regardless of which side (document
+// or table) it was parsed from: blank-edge-trimmed, raw lines joined by
+// "\n", with an internal blank line marking a paragraph break. That is
+// exactly the format `docCellLinesToTableCell` expects as input, and exactly
+// what `tableCellToDocText` produces as output, so a grid cell can be handed
+// to either format's renderer without further decoding.
+interface Grid {
+	title: string;
+	// Ordered by first occurrence (document) / declaration order (table).
+	rowTitles: string[];
+	colTitles: string[];
+	// cells[row][col]; "" for a cell the original omitted.
+	cells: string[][];
+}
+
+interface GridWithLines extends Grid {
+	titleLine: number;
+	// Line numbers aligned with rowTitles, used only for the transpose
+	// header-conflict check (post-transpose rendering doesn't need them).
+	rowLines: number[];
 }
 
 // ---------------------------------------------------------------------------
@@ -541,7 +573,7 @@ function parseAndValidateTable(
 	if (errors.length > 0) return { parsed: null, errors };
 
 	return {
-		parsed: { headers, bodyRows },
+		parsed: { headers, bodyRows, headerLine, bodyRowLines: bodyLinesNo },
 		errors,
 	};
 }
@@ -854,6 +886,26 @@ function parseAndValidateDocument(
 		}
 	}
 
+	// Title vs. column-title conflict. Converting to a table puts the title
+	// in the same header row as the column titles, so a column title equal
+	// to the title would produce a duplicate table header (table format
+	// already rejects that via its own header-uniqueness check).
+	const titleTrimmed = h1s[0]?.trimmed ?? "";
+	if (titleTrimmed !== "") {
+		const reported = new Set<string>();
+		for (const row of rows) {
+			for (const col of row.cols) {
+				if (col.h3.trimmed === titleTrimmed && !reported.has(col.h3.trimmed)) {
+					reported.add(col.h3.trimmed);
+					errors.push({
+						line: col.h3.origLine,
+						message: `Column title "${col.h3.trimmed}" ("###") matches the table title "${titleTrimmed}" ("#"). Headers must be unique. Line ${col.h3.origLine}.`,
+					});
+				}
+			}
+		}
+	}
+
 	if (errors.length > 0) return { parsed: null, errors };
 
 	const title = h1s[0];
@@ -887,6 +939,18 @@ function doubleTrailingBackslashes(s: string): string {
 	const m = /\\+$/.exec(s);
 	if (!m) return s;
 	return s.slice(0, m.index) + m[0] + m[0];
+}
+
+// Blank-edge-trims raw document lines and joins them with "\n" (an interior
+// blank line marks a paragraph break). This is the grid's cell-text format;
+// see the Grid model comment above.
+function docContentToGridText(rawLines: string[]): string {
+	let s = 0;
+	let e = rawLines.length - 1;
+	while (s <= e && (rawLines[s] ?? "").trim() === "") s++;
+	while (e >= s && (rawLines[e] ?? "").trim() === "") e--;
+	if (s > e) return "";
+	return rawLines.slice(s, e + 1).join("\n");
 }
 
 function docCellLinesToTableCell(rawLines: string[]): string {
@@ -1040,6 +1104,113 @@ function convertTableToDocumentBody(parsed: ParsedTable): string {
 	return out.join("\n");
 }
 
+// ---------------------------------------------------------------------------
+// Grid (validated structures -> Grid -> transpose -> output body)
+// ---------------------------------------------------------------------------
+
+function gridFromDocument(parsed: ParsedDocument): GridWithLines {
+	const colTitles = parsed.columns;
+	const rowTitles = parsed.rows.map((row) => row.h2.trimmed);
+	const rowLines = parsed.rows.map((row) => row.h2.origLine);
+	const cells = parsed.rows.map((row) => {
+		const byCol = new Map<string, DocColumn>();
+		for (const c of row.cols) {
+			if (!byCol.has(c.h3.trimmed)) byCol.set(c.h3.trimmed, c);
+		}
+		return colTitles.map((col) => {
+			const found = byCol.get(col);
+			return found ? docContentToGridText(found.contentLines) : "";
+		});
+	});
+	return {
+		title: parsed.title.trimmed,
+		rowTitles,
+		colTitles,
+		cells,
+		titleLine: parsed.title.origLine,
+		rowLines,
+	};
+}
+
+function gridFromTable(parsed: ParsedTable): GridWithLines {
+	const colTitles = parsed.headers.slice(1);
+	const rowTitles = parsed.bodyRows.map((row) => unescapeTitle(row[0] ?? ""));
+	const cells = parsed.bodyRows.map((row) =>
+		colTitles.map((_, j) => tableCellToDocText(row[j + 1] ?? "")),
+	);
+	return {
+		title: parsed.headers[0] ?? "",
+		rowTitles,
+		colTitles,
+		cells,
+		titleLine: parsed.headerLine,
+		rowLines: parsed.bodyRowLines,
+	};
+}
+
+// Original column titles become row titles (already ordered by first
+// occurrence); original row titles become column titles (already in
+// original order). cells[newRow][newCol] pulls from the original position
+// with row/col swapped.
+function transposeGrid(grid: Grid): Grid {
+	const rowTitles = grid.colTitles;
+	const colTitles = grid.rowTitles;
+	const cells = rowTitles.map((_, nr) => colTitles.map((_, nc) => grid.cells[nc]?.[nr] ?? ""));
+	return { title: grid.title, rowTitles, colTitles, cells };
+}
+
+// The title is kept unchanged, so it must not collide with a column title
+// that transposing is about to introduce (an original row title). Row
+// titles are already guaranteed unique among themselves by the source
+// format's own validation, so at most one can match.
+function checkTransposeHeaderConflict(grid: GridWithLines): ValidationError[] {
+	const idx = grid.rowTitles.findIndex((t) => t === grid.title);
+	if (idx === -1) return [];
+	const line = grid.rowLines[idx] ?? grid.titleLine;
+	const title = grid.rowTitles[idx];
+	return [
+		{
+			line,
+			message: `Row title "${title}" equals the table title "${grid.title}". Transposing would make it a column title equal to the (unchanged) title. Rename the row or the title before transposing. Line ${line}.`,
+		},
+	];
+}
+
+function renderGridToDocumentBody(grid: Grid): string {
+	const out: string[] = [];
+	out.push(`# ${grid.title}`);
+	out.push("");
+	grid.rowTitles.forEach((rowTitle, i) => {
+		out.push(`## ${rowTitle}`);
+		out.push("");
+		grid.colTitles.forEach((colTitle, j) => {
+			out.push(`### ${colTitle}`);
+			out.push("");
+			const cellText = grid.cells[i]?.[j] ?? "";
+			if (cellText !== "") {
+				out.push(...cellText.split("\n"));
+				out.push("");
+			}
+		});
+	});
+	return out.join("\n");
+}
+
+function renderGridToTableBody(grid: Grid): string {
+	const titleCell = escapeTitleForTable(grid.title);
+	const colCells = grid.colTitles.map(escapeTitleForTable);
+	const header = `| ${[titleCell, ...colCells].join(" | ")} |`;
+	const delim = `| ${["---", ...grid.colTitles.map(() => "---")].join(" | ")} |`;
+	const bodyRows = grid.rowTitles.map((rowTitle, i) => {
+		const rowCell = escapeTitleForTable(rowTitle);
+		const cells = grid.colTitles.map((_, j) =>
+			docCellLinesToTableCell((grid.cells[i]?.[j] ?? "").split("\n")),
+		);
+		return `| ${[rowCell, ...cells].join(" | ")} |`;
+	});
+	return [header, delim, ...bodyRows].join("\n");
+}
+
 function assembleOutput(
 	frontMatterLines: string[],
 	body: string,
@@ -1112,6 +1283,84 @@ export function convertNote(
 		return {
 			ok: true,
 			direction: "document-to-table",
+			output: assembleOutput(frontMatterLines, body),
+		};
+	}
+
+	return {
+		ok: false,
+		errors: [
+			{
+				line: frontMatterCount + 1,
+				message: `Input matches neither a valid document ("#" → "##" → "###") nor a single valid Markdown table. Line ${frontMatterCount + 1}.`,
+			},
+		],
+	};
+}
+
+// ---------------------------------------------------------------------------
+// Transpose
+// ---------------------------------------------------------------------------
+
+export type NoteFormat = "document" | "table";
+
+export type TransposeResult =
+	| { ok: true; format: NoteFormat; output: string }
+	| { ok: false; errors: ValidationError[] };
+
+// Swaps rows and columns, keeping the input format (document stays a
+// document, table stays a table). The title is unchanged; original column
+// titles become row titles (ordered by first occurrence) and original row
+// titles become column titles (in their original order). Shares all
+// validation and escaping with convertNote via the same parse functions;
+// only the grid build/transpose/render step above is transpose-specific.
+export function transposeNote(
+	input: string,
+	options?: ConvertNoteOptions,
+): TransposeResult {
+	const useFrontMatter = options?.frontMatter ?? true;
+	const normalized = input.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+	const allLines = normalized.split("\n");
+	const { frontMatterLines, bodyLines, frontMatterCount } = useFrontMatter
+		? splitFrontMatter(allLines)
+		: { frontMatterLines: [] as string[], bodyLines: allLines, frontMatterCount: 0 };
+
+	if (bodyLines.join("\n").trim() === "") {
+		return {
+			ok: false,
+			errors: [
+				{
+					line: frontMatterCount + 1,
+					message: `Empty note: no content after front matter. Provide a document ("#" → "##" → "###") or a single Markdown table. Line ${frontMatterCount + 1}.`,
+				},
+			],
+		};
+	}
+
+	if (isEntirelyTable(bodyLines)) {
+		const { parsed, errors } = parseAndValidateTable(bodyLines, frontMatterCount);
+		if (!parsed) return { ok: false, errors };
+		const grid = gridFromTable(parsed);
+		const conflict = checkTransposeHeaderConflict(grid);
+		if (conflict.length > 0) return { ok: false, errors: conflict };
+		const body = renderGridToTableBody(transposeGrid(grid));
+		return {
+			ok: true,
+			format: "table",
+			output: assembleOutput(frontMatterLines, body),
+		};
+	}
+
+	if (containsDocHeadings(bodyLines)) {
+		const { parsed, errors } = parseAndValidateDocument(bodyLines, frontMatterCount);
+		if (!parsed) return { ok: false, errors };
+		const grid = gridFromDocument(parsed);
+		const conflict = checkTransposeHeaderConflict(grid);
+		if (conflict.length > 0) return { ok: false, errors: conflict };
+		const body = renderGridToDocumentBody(transposeGrid(grid));
+		return {
+			ok: true,
+			format: "document",
 			output: assembleOutput(frontMatterLines, body),
 		};
 	}

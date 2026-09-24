@@ -43,17 +43,29 @@ The document format uses headings to define structure: the title (`#`), row titl
 
 ## Usage
 
-Two commands are available from the command palette:
+Three commands are available from the command palette:
 
 - **Convert document ↔ table** — converts the entire active note. Available only when the active file is a Markdown note.
 - **Convert selection ↔ table** — converts the current selection in place. Available only when there is a non-empty selection. Selection conversions are not backed up separately; undo with Ctrl/Cmd+Z if needed.
+- **Transpose rows ↔ columns** — swaps rows and columns in the entire active note, keeping its format (a document stays a document, a table stays a table). Available only when the active file is a Markdown note.
 
-Both commands automatically detect whether the input is a document or a table and convert it to the other format.
+Both convert commands automatically detect whether the input is a document or a table and convert it to the other format.
 
 The same actions are available from the right-click menu:
 
-- The file menu (right-click a Markdown file, e.g. in the file explorer) shows **Convert document ↔ table**.
-- The editor menu (right-click inside a note) shows **Convert selection ↔ table** when there is a selection, otherwise **Convert document ↔ table**.
+- The file menu (right-click a Markdown file, e.g. in the file explorer) shows **Convert document ↔ table** and **Transpose rows ↔ columns**.
+- The editor menu (right-click inside a note) shows **Convert selection ↔ table** when there is a selection, otherwise **Convert document ↔ table** and **Transpose rows ↔ columns**.
+
+### Transpose example
+
+Transposing the table above yields the equivalent of:
+```markdown
+| Table Title | Row 1 Title | Row 2 Title |
+| --- | --- | --- |
+| Column A Title | A1 text. | A2 text. |
+| Column B Title | B1 text. | B2 text. |
+```
+The title stays the same; original column titles become row titles (ordered by first occurrence) and original row titles become column titles (in their original order). Transposing a document works the same way, in document form. Transposing a note whose title would then equal one of the new column titles (an original row title) is rejected, since titles are never renamed to avoid the conflict.
 
 ## Settings
 

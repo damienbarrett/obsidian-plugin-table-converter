@@ -11,6 +11,7 @@ import {
 	convertNote,
 	formatErrorsAsNote,
 	getOutputPaths,
+	transposeNote,
 	type ValidationError,
 } from "./converter";
 
@@ -58,6 +59,42 @@ function directionMessage(direction: "document-to-table" | "table-to-document"):
 	return direction === "document-to-table" ? "document → table" : "table → document";
 }
 
+// Which whole-note transformation runFileOperation performs. Both share the
+// same read/validate/backup/atomic-write/race path below; they differ only
+// in which converter.ts entry point is called and how success/failure is
+// worded.
+export type Operation = "convert" | "transpose";
+
+type OpResult =
+	| { ok: true; output: string; successMessage: string }
+	| { ok: false; errors: ValidationError[] };
+
+// Runs `op` against `text`, normalizing convertNote's and transposeNote's
+// differently-shaped results into one OpResult. The atomic-write race check
+// re-runs this same function against the just-read data, so both call sites
+// (initial validation and the race re-check) always agree on which
+// operation ran.
+function runOperation(op: Operation, text: string): OpResult {
+	if (op === "convert") {
+		const r = convertNote(text);
+		if (!r.ok) return r;
+		return { ok: true, output: r.output, successMessage: directionMessage(r.direction) };
+	}
+	const r = transposeNote(text);
+	if (!r.ok) return r;
+	return { ok: true, output: r.output, successMessage: `transposed rows ↔ columns (${r.format})` };
+}
+
+function opNoun(op: Operation): string {
+	return op === "convert" ? "conversion" : "transpose";
+}
+
+function opChangedMessage(op: Operation): string {
+	return op === "convert"
+		? "Note changed during conversion, try again."
+		: "Note changed during transpose, try again.";
+}
+
 // Mirrors the note's vault-relative folder structure under the backup
 // folder, so e.g. "Projects/Notes.md" and "Archive/Notes.md" don't collide
 // on a shared "Notes.md.BAK".
@@ -79,9 +116,10 @@ async function reportFailure(
 	file: TFile,
 	errors: ValidationError[],
 	settings: WorkflowSettings,
+	op: Operation = "convert",
 ): Promise<void> {
 	const { errorPath, errorName } = getOutputPaths(file.path);
-	const summary = `Table Converter: conversion failed (${errors.length} error${errors.length === 1 ? "" : "s"}).`;
+	const summary = `Table Converter: ${opNoun(op)} failed (${errors.length} error${errors.length === 1 ? "" : "s"}).`;
 	if (settings.errorOutput === "note") {
 		try {
 			await adapter.writeOrOverwrite(errorPath, formatErrorsAsNote(file.path, errors));
@@ -111,15 +149,17 @@ async function deleteStaleErrorNote(adapter: VaultAdapter, file: TFile): Promise
 	}
 }
 
-// Converts the whole note in place: read, validate, back up, then write the
-// converted content atomically. Used by both the command palette action and
-// the file-menu item, so it takes the target TFile rather than assuming the
-// active file.
-export async function convertFile(
+// Runs `op` on the whole note in place: read, validate, back up, then write
+// the transformed content atomically. Used by both the command palette
+// actions and the file-menu items, so it takes the target TFile rather than
+// assuming the active file. Shared by convertFile and transposeFile below,
+// which are thin wrappers picking the operation.
+async function runFileOperation(
 	adapter: VaultAdapter,
 	reporter: Reporter,
 	file: TFile,
 	settings: WorkflowSettings,
+	op: Operation,
 ): Promise<void> {
 	let original: string;
 	try {
@@ -130,9 +170,9 @@ export async function convertFile(
 		return;
 	}
 
-	const result = convertNote(original);
+	const result = runOperation(op, original);
 	if (!result.ok) {
-		await reportFailure(adapter, reporter, file, result.errors, settings);
+		await reportFailure(adapter, reporter, file, result.errors, settings, op);
 		return;
 	}
 
@@ -163,6 +203,7 @@ export async function convertFile(
 					},
 				],
 				settings,
+				op,
 			);
 			return;
 		}
@@ -177,7 +218,10 @@ export async function convertFile(
 				racedAway = true;
 				return data;
 			}
-			const fresh = convertNote(data);
+			// Re-run the same operation, not just re-check the original result,
+			// so a race check against forged/replayed data can't reuse a stale
+			// output.
+			const fresh = runOperation(op, data);
 			if (!fresh.ok) {
 				// Defensive: data is identical to the already-validated
 				// original, so this should be unreachable. Treat it like a
@@ -196,10 +240,11 @@ export async function convertFile(
 			[
 				{
 					line: 1,
-					message: "Could not write the converted note. Source may be unchanged.",
+					message: `Could not write the ${op === "convert" ? "converted" : "transposed"} note. Source may be unchanged.`,
 				},
 			],
 			settings,
+			op,
 		);
 		return;
 	}
@@ -209,14 +254,36 @@ export async function convertFile(
 			adapter,
 			reporter,
 			file,
-			[{ line: 1, message: "Note changed during conversion, try again." }],
+			[{ line: 1, message: opChangedMessage(op) }],
 			settings,
+			op,
 		);
 		return;
 	}
 
 	await deleteStaleErrorNote(adapter, file);
-	reporter.notice(`Table Converter: ${directionMessage(result.direction)}. ${backupMessage}.`);
+	reporter.notice(`Table Converter: ${result.successMessage}. ${backupMessage}.`);
+}
+
+// Converts the whole note in place (document ↔ table).
+export async function convertFile(
+	adapter: VaultAdapter,
+	reporter: Reporter,
+	file: TFile,
+	settings: WorkflowSettings,
+): Promise<void> {
+	return runFileOperation(adapter, reporter, file, settings, "convert");
+}
+
+// Transposes the whole note in place, keeping its format (document stays a
+// document, table stays a table).
+export async function transposeFile(
+	adapter: VaultAdapter,
+	reporter: Reporter,
+	file: TFile,
+	settings: WorkflowSettings,
+): Promise<void> {
+	return runFileOperation(adapter, reporter, file, settings, "transpose");
 }
 
 // Converts a selection's text and returns the replacement on success. No

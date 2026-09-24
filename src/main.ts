@@ -17,6 +17,7 @@ import type { ValidationError } from "./converter";
 import {
 	convertFile,
 	convertSelection,
+	transposeFile,
 	type BackupMode,
 	type ErrorOutput,
 	type Reporter,
@@ -255,6 +256,18 @@ export default class TableConverterPlugin extends Plugin {
 		});
 
 		this.addCommand({
+			id: "transpose-rows-columns",
+			name: "Transpose rows ↔ columns",
+			checkCallback: (checking: boolean) => {
+				const file = this.app.workspace.getActiveFile();
+				if (!file || file.extension.toLowerCase() !== "md") return false;
+				if (checking) return true;
+				void this.runTransposeFile(file);
+				return true;
+			},
+		});
+
+		this.addCommand({
 			id: "convert-selection",
 			name: "Convert selection ↔ table",
 			editorCheckCallback: (
@@ -280,6 +293,12 @@ export default class TableConverterPlugin extends Plugin {
 						.setIcon("table")
 						.onClick(() => void this.runConvertFile(file)),
 				);
+				menu.addItem((item) =>
+					item
+						.setTitle("Transpose rows ↔ columns")
+						.setIcon("arrow-left-right")
+						.onClick(() => void this.runTransposeFile(file)),
+				);
 			}),
 		);
 
@@ -303,6 +322,12 @@ export default class TableConverterPlugin extends Plugin {
 								.setIcon("table")
 								.onClick(() => void this.runConvertFile(file)),
 						);
+						menu.addItem((item) =>
+							item
+								.setTitle("Transpose rows ↔ columns")
+								.setIcon("arrow-left-right")
+								.onClick(() => void this.runTransposeFile(file)),
+						);
 					}
 				},
 			),
@@ -324,6 +349,10 @@ export default class TableConverterPlugin extends Plugin {
 
 	private async runConvertFile(file: TFile): Promise<void> {
 		await convertFile(this.adapter, this.reporter, file, this.workflowSettings());
+	}
+
+	private async runTransposeFile(file: TFile): Promise<void> {
+		await transposeFile(this.adapter, this.reporter, file, this.workflowSettings());
 	}
 
 	private async runConvertSelection(editor: Editor, file: TFile): Promise<void> {
