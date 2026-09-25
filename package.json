@@ -1,6 +1,6 @@
 {
 	"name": "obsidian-plugin-table-converter",
-	"version": "1.0.0",
+	"version": "1.1.0",
 	"description": "Convert heading-based Markdown documents to Markdown tables and back, and transpose rows and columns.",
 	"main": "main.js",
 	"scripts": {
