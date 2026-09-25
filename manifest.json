@@ -3,7 +3,7 @@
 	"name": "Table Converter",
 	"version": "1.0.0",
 	"minAppVersion": "1.6.6",
-	"description": "Convert heading-based documents to Markdown tables and back.",
+	"description": "Convert heading-based documents to Markdown tables and back, and transpose rows and columns.",
 	"author": "damienbarrett",
 	"authorUrl": "https://github.com/damienbarrett",
 	"isDesktopOnly": false

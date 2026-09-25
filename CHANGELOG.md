@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.1.0
 
 - Backups are now named `Note.BAK.md` (inserted before the `.md` extension) instead of `Note.md.BAK`, so a backup is itself a Markdown note; existing `.md.BAK` files are not touched. The convert and transpose commands, and their menu items, are also no longer offered for a note whose name ends in `.BAK.md` or `.errors.md` (case-insensitive), since converting or transposing one of the plugin's own generated notes doesn't make sense.
 - Add a "Transpose rows ↔ columns" command (`transpose-rows-columns`), plus file-menu and editor-menu (whole-note) items, that swaps rows and columns in place while keeping the note's format (document stays a document, table stays a table). Shares conversion's validation, escaping, backup, error-reporting, and atomic-write/race rules. Rejects a transposition that would make the (unchanged) title equal a new column title.
